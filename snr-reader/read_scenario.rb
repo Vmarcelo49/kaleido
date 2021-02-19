@@ -12,7 +12,7 @@ else
   ADDRESSES = {}
   REQUIRE_LABELS = Set.new
   puts "The sha256 of the loaded file does not match the expected value! You are probably trying to load a different SNR file. This may or may not work. Remove the exit statement from this check in the script to continue"
-  exit
+  #exit
 end
 
 file = open(path, 'rb')
@@ -62,9 +62,15 @@ class Varlen
     elsif @first_byte >= 0xd0 && @first_byte <= 0xdf
       @mode = :md # most likely accesses function parameters
       @value = @first_byte & 0xf
+    elsif @first_byte >= 0xe0 && @first_byte <= 0xef
+      @mode = :me # most likely a sort of null value
+      @value = 0
     elsif @first_byte >= 0xb0 && @first_byte <= 0xbf
       @mode = :mb # most likely accesses registers
       @value = @first_byte & 0xf
+    elsif @first_byte >= 0x40 && @first_byte <= 0x7f
+      @mode = :mneg # most likely negative values
+      @value = @first_byte - 128
     else
       @mode = :mraw
       @value = @first_byte
@@ -78,7 +84,11 @@ class Varlen
   end
 
   def constant?
-    [:mraw, :m8, :m9].include? @mode
+    [:mraw, :mneg, :m8, :m9].include? @mode
+  end
+
+  def length
+    @data.length
   end
 
   def to_s
@@ -231,6 +241,8 @@ class OutFile
   # ----------------------------------- #
 
   def register(num)
+    return parameter(num & 0xf) if num >= 0x1000 && num <= 0x100f
+
     unless @known_registers.include? num
       @h[2] << "numalias #{raw_register(num).delete('%')}, #{@nsc_variable_counter}"
       @nsc_variable_counter += 1
@@ -239,7 +251,9 @@ class OutFile
     raw_register(num)
   end
 
-  def raw_register(num); "%rx#{num.to_s(16)}" end
+  def raw_register(num)
+    "%rx#{num.to_s(16)}"
+  end
 
   def parameter(num)
     unless @known_parameters.include? num
@@ -299,6 +313,8 @@ class OutFile
       when :md
         # function parameter access
         parameter(val.value)
+      when :me
+        null
       end
     end
   end
@@ -314,7 +330,9 @@ class OutFile
     nscify(val) { |value| raw_background(value) }
   end
 
-  def raw_background(id); "BG_0x#{id.to_s(16)}_#{normalize(@backgrounds[id].name)}"; end
+  def raw_background(id); "bg_0x#{id.to_s(16)}_#{normalize(@backgrounds[id].name)}"; end
+
+  def null; "null"; end
 
   def nyi
     @nyi = true
@@ -374,33 +392,27 @@ class OutFile
   # Register stuff
 
   def register_signed_assign(reg, value)
-    nyi
-    debug "mov #{register(reg)}, #{value}"
+    self << "mov #{register(reg)}, #{nscify(value)} ; #{value}"
   end
 
   def register_unsigned_assign(reg, value)
-    nyi
-    debug "mov #{register(reg)}, #{value} ;unsigned"
+    self << "mov #{register(reg)}, #{nscify(value)} ;unsigned #{value}"
   end
 
   def register_add(reg, value)
-    nyi
-    debug "mov #{register(reg)}, #{register(reg)} + #{value}"
+    self << "mov #{register(reg)}, #{register(reg)} + #{nscify(value)} ; #{value}"
   end
 
   def register_sub(reg, value)
-    nyi
-    debug "mov #{register(reg)}, #{register(reg)} - #{value}"
+    self << "mov #{register(reg)}, #{register(reg)} - #{nscify(value)} ; #{value}"
   end
 
   def register_mul(reg, value)
-    nyi
-    debug "mov #{register(reg)}, #{register(reg)} * #{value}"
+    self << "mov #{register(reg)}, #{register(reg)} * #{nscify(value)} ; #{value}"
   end
 
   def register_div(reg, value)
-    nyi
-    debug "mov #{register(reg)}, #{register(reg)} / #{value}"
+    self << "mov #{register(reg)}, #{register(reg)} / #{nscify(value)} ; #{value}"
   end
 
   def register_or(reg, value)
@@ -413,19 +425,17 @@ class OutFile
     debug "mov #{register(reg)}, #{register(reg)} [AND] #{value}"
   end
 
-  def register_0x08(reg, value) # perhaps mod?
+  def register_0x08(reg, value) # something special to kaleido. (Couldn't find this in saku) implementing as + for the time being...
     nyi
-    debug "mov #{register(reg)}, #{register(reg)} [0x08] #{value}"
+    self << "mov #{register(reg)}, #{register(reg)} [0x08] #{nscify(value)} ; #{value}"
   end
 
   def register_add2(reg, value1, value2)
-    nyi
-    debug "mov #{register(reg)}, #{value1} + #{value2}"
+    self << "mov #{register(reg)}, #{nscify(value1)} + #{nscify(value2)} ; #{value1} #{value2}"
   end
 
   def register_sub2(reg, value1, value2)
-    nyi
-    debug "mov #{register(reg)}, #{value1} - #{value2}"
+    self << "mov #{register(reg)}, #{nscify(value1)} - #{nscify(value2)} ; #{value1} #{value2}"
   end
 
   def register_0x84(reg, value)
@@ -446,8 +456,44 @@ class OutFile
   end
 
   def calc(target, operations)
-    nyi
-    debug "calc #{target} := #{hex(operations)}"
+    stack = []
+    operations.each do |op, val|
+      case op
+      when 0x00 # push
+        stack.push(nscify(val))
+      when 0x01
+        second = stack.pop
+        stack.push(['(', stack.pop, ' + ', second, ')'])
+      when 0x02
+        second = stack.pop
+        stack.push(['(', stack.pop, ' - ', second, ')'])
+      when 0x03
+        second = stack.pop
+        stack.push(['(', stack.pop, ' * ', second, ')'])
+      when 0x04
+        second = stack.pop
+        stack.push(['(', stack.pop, ' / ', second, ')'])
+      when 0x0b
+        nyi
+        stack.push(['([0x0b] ', stack.pop, ')'])
+      when 0x18 # total conjecture: limiting operation?
+        nyi
+        third = stack.pop
+        second = stack.pop
+        stack.push(['(', stack.pop, ' [0x18] ', second, third, ')'])
+      else
+        nyi
+        second = stack.pop
+        stack.push(['(', stack.pop, " [0x#{op.to_s(16)}] ", second, ')'])
+      end
+    end
+
+    if stack.length != 1
+      nyi
+      debug "Could not fully parse expression! Stack at the end: #{stack}"
+    end
+
+    self << "mov #{register(target)}, #{stack.flatten.join} ; calc #{operations.map { |e| e.length == 2 ? [hex(e.first), e.last.to_s] : [hex(e.first)] }.join(' ')}"
   end
 
   def ins_0x43(val1, data)
@@ -455,9 +501,9 @@ class OutFile
     debug "instruction 0x43 (store multiple?), val1: #{val1}, data: #{hex(data)}"
   end
 
-  def ins_0x44(val1, val2, val3, data)
-    nyi
-    debug "instruction 0x44 (another kind of store string?), val1: #{val1}, val2: #{val2}, val3: #{val3}, data: #{hex(data)}"
+  def lookup(reg, val3, data)
+    self << "movz ?lookup, #{data.map { |e| nscify(e) }.join(', ')} ; #{data.map(&:to_s)}"
+    self << "mov #{register(reg)}, ?lookup[#{nscify(val3)}] ; #{val3}"
   end
 
   def ins_0x45(val1, val2, data)
@@ -468,8 +514,7 @@ class OutFile
   # Control flow
 
   def call(addr, data)
-    debug "call #{address(addr)}, #{data.map(&:to_s).join(', ')}"
-    self << "#{address(addr)} #{data.map { |e| nscify(e) }.join(', ')}"
+    self << "#{address(addr)} #{data.map { |e| nscify(e) }.join(', ')} ; #{data.map(&:to_s).join(', ')}"
     unless @known_functions.include?(addr)
       @h[1] << "defsub #{address(addr)}"
       if data.length > 0
@@ -486,31 +531,31 @@ class OutFile
   end
 
   def conditional_jump(val1, val2, addr, comparison)
-    debug "goto *#{address(addr)} if #{val1} #{comparison} #{val2}"
+    self << "if #{nscify(val1)} #{comparison} #{nscify(val2)} goto *#{address(addr)} ; #{val1} #{val2}"
   end
 
-  def conditional_jump_0x00(val1, val2, addr)
-    nyi; conditional_jump(val1, val2, addr, "==")
+  def conditional_jump_equal(val1, val2, addr)
+    conditional_jump(val1, val2, addr, "==")
   end
 
-  def conditional_jump_0x01(val1, val2, addr)
-    nyi; conditional_jump(val1, val2, addr, "==")
+  def conditional_jump_inequal(val1, val2, addr)
+    conditional_jump(val1, val2, addr, "!=")
   end
 
-  def conditional_jump_0x02(val1, val2, addr)
-    nyi; conditional_jump(val1, val2, addr, ">")
+  def conditional_jump_greater_than(val1, val2, addr)
+    conditional_jump(val1, val2, addr, ">")
   end
 
-  def conditional_jump_0x04(val1, val2, addr)
-    nyi; conditional_jump(val1, val2, addr, "<=")
+  def conditional_jump_less_or_equal(val1, val2, addr)
+    conditional_jump(val1, val2, addr, "<=")
   end
 
-  def conditional_jump_0x05(val1, val2, addr)
-    nyi; conditional_jump(val1, val2, addr, "<")
+  def conditional_jump_less_than(val1, val2, addr)
+    conditional_jump(val1, val2, addr, "<")
   end
 
-  def conditional_jump_0x06(val1, val2, addr)
-    nyi; conditional_jump(val1, val2, addr, "[0x06]")
+  def conditional_jump_0x06(val1, val2, addr) # conjecture: checks whether bit is set
+    self << "if #{nscify(val1)} & #{nscify(val2)} != 0 goto *#{address(addr)} ; #{val1} #{val2}"
   end
 
   def conditional_jump_0x86(val1, val2, addr)
@@ -527,9 +572,8 @@ class OutFile
     debug "instruction 0x49 (return?)"
   end
 
-  def ins_0x4a(value, targets)
-    nyi
-    debug "instruction 0x4a, value: #{value}, targets: #{addresses(targets)}"
+  def table_goto(value, targets)
+    self << "tablegoto #{nscify(value)}, #{addresses(targets).join(', ')} ; #{value}"
   end
 
   def ins_0x4b(register, targets)
@@ -584,19 +628,16 @@ class OutFile
 
   # Stack related?
 
-  def ins_0x4d(val1, val2)
-    nyi
-    debug "instruction 0x4d (push?), val1: #{hex(val1)}, val2: #{val2}"
+  def stack_push(values)
+    values.each do |value|
+      self << "mov %sp, %sp + 1:mov ?stack[%sp], #{nscify(value)} ; push #{value}"
+    end
   end
 
-  def ins_0x4e_0x01(val1)
-    nyi
-    debug "instruction 0x4e 0x01 (pop one value?), val1: #{hex(val1)}"
-  end
-
-  def ins_0x4e_0x02(val1, val2)
-    nyi
-    debug "instruction 0x4e 0x02 (pop two values?), val1: #{hex(val1)}, val2: #{hex(val2)}"
+  def stack_pop(values)
+    values.each do |value|
+      self << "mov #{register(value)}, ?stack[%sp]:mov %sp, %sp - 1 ; pop #{hex(value)}"
+    end
   end
 
   def ins_0xff(data)
@@ -1062,7 +1103,7 @@ out << "; Element count: #{element_count}"
 out.newline
 
 # The loop for parsing the script data
-loop do
+while true do
   out.offset = file.pos
   begin
     instruction = file.readbyte
@@ -1408,13 +1449,20 @@ loop do
     data = file.unpack_read('S<' * length)
     out.ins_0x43(val1, data)
   when 0x44 # ??
-    val1, val2, val3 = file.read_variable_length(3)
+    register, _ = file.unpack_read('S<')
+    val3, _ = file.read_variable_length(1)
     len, _ = file.unpack_read('S<')
-    data = file.unpack_read('L<' * len)
-    out.ins_0x44(val1, val2, val3, data)
+    data = []
+    len.times do
+      val, _ = file.read_variable_length(1)
+      file.read(4 - val.length)
+      data << val
+    end
+    # data = file.unpack_read('L<' * len)
+    out.lookup(register, val3, data)
   when 0x45 # ??
-    val1, _ = file.read_variable_length(1)
-    val2, length = file.unpack_read('CS<')
+    val1, val2 = file.read_variable_length(2)
+    length, _ = file.unpack_read('S<')
     data = file.unpack_read('S<' * length)
     out.ins_0x45(val1, val2, data)
   when 0x46 # conditional jump
@@ -1423,23 +1471,23 @@ loop do
     when 0x00
       val1, val2 = file.read_variable_length(2)
       address, _ = file.unpack_read('L<')
-      out.conditional_jump_0x00(val1, val2, address)
+      out.conditional_jump_equal(val1, val2, address)
     when 0x01
       val1, val2 = file.read_variable_length(2)
       address, _ = file.unpack_read('L<')
-      out.conditional_jump_0x01(val1, val2, address)
+      out.conditional_jump_inequal(val1, val2, address)
     when 0x02
       val1, val2 = file.read_variable_length(2)
       address, _ = file.unpack_read('L<')
-      out.conditional_jump_0x02(val1, val2, address)
+      out.conditional_jump_greater_than(val1, val2, address)
     when 0x04
       val1, val2 = file.read_variable_length(2)
       address, _ = file.unpack_read('L<')
-      out.conditional_jump_0x04(val1, val2, address)
+      out.conditional_jump_less_or_equal(val1, val2, address)
     when 0x05
       val1, val2 = file.read_variable_length(2)
       address, _ = file.unpack_read('L<')
-      out.conditional_jump_0x05(val1, val2, address)
+      out.conditional_jump_less_than(val1, val2, address)
     when 0x06
       val1, val2 = file.read_variable_length(2)
       address, _ = file.unpack_read('L<')
@@ -1464,7 +1512,7 @@ loop do
     value, _ = file.read_variable_length(1)
     len, _ = file.unpack_read('S<')
     targets = file.unpack_read('L<' * len)
-    out.ins_0x4a(value, targets)
+    out.table_goto(value, targets)
   when 0x4b # another kind of jump on value
     # register is likely related to val1 from 0x46 0x00
     register, len = file.unpack_read('CS<')
@@ -1474,21 +1522,13 @@ loop do
     data = file.unpack_read('CCCC')
     out.ins_0x4c(data)
   when 0x4d # maybe stack push?
-    val1, _ = file.unpack_read('C')
-    val2, _ = file.read_variable_length(1)
-    out.ins_0x4d(val1, val2)
+    len, _ = file.unpack_read('C')
+    values = file.read_variable_length(len)
+    out.stack_push(values)
   when 0x4e # maybe stack pop?
-    mode, val1 = file.unpack_read('CS<')
-    case mode
-    when 0x01
-      out.ins_0x4e_0x01(val1)
-    when 0x02
-      val2, _ = file.unpack_read('S<')
-      out.ins_0x4e_0x02(val1, val2)
-    else
-      puts "Invalid 0x4e mode"
-      break
-    end
+    len, _ = file.unpack_read('C')
+    values = file.unpack_read('S<' * len)
+    out.stack_pop(values)
   when 0xff # some kind of data section?
     data = []
     loop do
@@ -1515,5 +1555,7 @@ loop do
     break
   end
 end
+
+puts "Writing..."
 
 out.write(ARGV[1]) if ARGV[1]

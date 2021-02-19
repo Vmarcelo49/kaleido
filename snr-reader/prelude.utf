@@ -1,4 +1,4 @@
-;modew1080
+;value2500,modew1080
 ;gameid test
 
 *define
@@ -29,3 +29,15 @@ numalias i7, 7
 numalias i8, 8
 numalias i9, 9
 numalias i10, 10
+numalias sp, 11
+
+numalias stack, 0
+dim ?stack[256]
+
+numalias lookup, 1
+dim ?lookup[256]
+
+numalias null, 0
+
+defsub stack_push
+defsub stack_pop
