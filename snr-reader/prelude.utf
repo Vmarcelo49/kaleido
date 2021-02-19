@@ -18,11 +18,14 @@ selectcolor #ffffff,#cccccc
 menuselectcolor #ffffff,#aaaaaa,#999999
 defaultspeed 0,0,0
 
-game
-
-*start
-if PONSCRIPTER = 0 skip 2
-h_mapfont 0, "default.ttf"
-
-!s0
-setwindow 300,800,32,3,36,20,0,2,20,1,1,#999999,0,0,1919,1079
+; internal variables
+numalias i1, 1
+numalias i2, 2
+numalias i3, 3
+numalias i4, 4
+numalias i5, 5
+numalias i6, 6
+numalias i7, 7
+numalias i8, 8
+numalias i9, 9
+numalias i10, 10

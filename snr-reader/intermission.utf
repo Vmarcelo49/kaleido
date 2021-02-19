@@ -1,0 +1,10 @@
+game
+
+*start
+if PONSCRIPTER = 0 skip 2
+h_mapfont 0, "default.ttf"
+
+!s0
+setwindow 300,800,32,3,36,20,0,2,20,1,1,#999999,0,0,1919,1079
+
+goto *L_scenario_start ; jump to where the script actually starts

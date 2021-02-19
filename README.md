@@ -10,7 +10,7 @@ Current status:
 
  - [x] Successfully parses the entire file
  - [x] Dialogue
- - [ ] Backgrounds
+ - [x] Backgrounds
  - [ ] Sprites
  - [ ] BGM
  - [ ] SE
