@@ -1,0 +1,28 @@
+;modew1080
+;gameid test
+
+*define
+
+
+; This is ignored by Ponscripter
+numalias PONSCRIPTER, 0
+
+caption "NScripter test suite"
+versionstr "NScripter test suite"," version 1.0"
+
+savename "Save","Load","File "
+savenumber 20
+effectblank 0
+transmode alpha
+selectcolor #ffffff,#cccccc
+menuselectcolor #ffffff,#aaaaaa,#999999
+defaultspeed 0,0,0
+
+game
+
+*start
+if PONSCRIPTER = 0 skip 2
+h_mapfont 0, "default.ttf"
+
+!s0
+setwindow 300,800,32,3,36,20,0,2,20,1,1,#999999,0,0,1919,1079
