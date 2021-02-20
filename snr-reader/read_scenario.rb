@@ -11,6 +11,7 @@ if sha256 == '1a41c95be7427ddd3397249fde5be56dfd6f4a8cef20ab27a7a648f31e824dfb'
 else
   ADDRESSES = {}
   REGISTERS = {}
+  FF_CALLS = {}
   REQUIRE_LABELS = Set.new
   puts "The sha256 of the loaded file does not match the expected value! You are probably trying to load a different SNR file. This may or may not work. Remove the exit statement from this check in the script to continue"
   #exit
@@ -37,6 +38,11 @@ HALFWIDTH_REPLACE = '「」ぁぃぅぇぉゃゅょあいうえおかきくけ�
 # File references
 BG_FOLDER = 'bg'
 BG_EXT = '.png'
+
+# If true, certain internal instructions are ignored while parsing, as they
+# are when playing the game normally. If false, it can be considered as
+# "test mode"
+SNR_PROD = true
 
 def byte_print(array, c = 94)
   Kernel.puts array.flatten.map { |e| e.to_s(16).rjust(2, '0') }.join(' ').c(c)
@@ -155,6 +161,7 @@ class IO
     end
   end
 end
+
 
 # Represents an nscripter script file that will be written.
 # This class does most of the snr -> nsc transformation.
@@ -421,12 +428,12 @@ class OutFile
 
   def register_or(reg, value)
     nyi
-    debug "mov #{register(reg)}, #{register(reg)} [OR] #{value}"
+    debug "mov #{register(reg)}, #{register(reg)} | #{value}"
   end
 
   def register_and(reg, value)
     nyi
-    debug "mov #{register(reg)}, #{register(reg)} [AND] #{value}"
+    debug "mov #{register(reg)}, #{register(reg)} & #{value}"
   end
 
   def register_0x08(reg, value) # something special to kaleido. (Couldn't find this in saku) implementing as + for the time being...
@@ -459,60 +466,123 @@ class OutFile
     debug "instruction 0x40, val1: #{val1}, val2: #{val2}, val3: #{val3}"
   end
 
+  # The SNR file uses a stack-based operation language for complex calculations.
+  # This class represents one of those operations being parsed and converted to
+  # NSC.
+  class CalcStack
+    def initialize
+      @stack = []
+      @result = []
+    end
+
+    def push(val)
+      @stack.push(val)
+    end
+
+    def pop
+      @stack.pop
+    end
+
+    def raw_stack
+      @stack
+    end
+
+    # A simple binary operation that can be expressed with a single operator in nsc.
+    def simple_binary(operator)
+      second = @stack.pop
+      @stack.push(['(', @stack.pop, " #{operator} ", second, ')'])
+    end
+
+    # A simple unary operation that can be expressed with a single operator in nsc.
+    def simple_unary(operator)
+      @stack.push(["(#{operator} ", @stack.pop, ')'])
+    end
+
+    # Stores the calculation up to the current point in %i1, so a more complex
+    # calculation can be performed in the meantime. The calculation will be
+    # resumed with %i2.
+    def intermediate
+      @result << "mov %i1, #{nested_array_to_nsc(@stack.pop)} ; calc intermediate"
+      push('%i1')
+      yield
+      push('%i2')
+    end
+
+    def finalize(register)
+      @result << "mov #{register}, #{nested_array_to_nsc(@stack.pop)} ; calc final"
+      @result.join("\n")
+    end
+
+    def <<(line)
+      @result << line
+    end
+
+    def empty?
+      @stack.empty?
+    end
+
+    def nested_array_to_nsc(nested)
+      raise 'nested is nil' if nested.nil?
+      [nested].flatten.join
+    end
+  end
+
   def calc(target, operations)
-    stack = []
+    stack = CalcStack.new
+
     operations.each do |op, val|
       case op
       when 0x00 # push
         stack.push(nscify(val))
       when 0x01
-        second = stack.pop
-        stack.push(['(', stack.pop, ' + ', second, ')'])
+        stack.simple_binary('+')
       when 0x02
-        second = stack.pop
-        stack.push(['(', stack.pop, ' - ', second, ')'])
+        stack.simple_binary('-')
       when 0x03
-        second = stack.pop
-        stack.push(['(', stack.pop, ' * ', second, ')'])
+        stack.simple_binary('*')
       when 0x04
-        second = stack.pop
-        stack.push(['(', stack.pop, ' / ', second, ')'])
+        stack.simple_binary('/')
       when 0x0b
         nyi
-        stack.push(['([0x0b] ', stack.pop, ')'])
-      when 0x18 # total conjecture: limiting operation?
-        nyi
-        third = stack.pop
-        second = stack.pop
-        stack.push(['(', stack.pop, ' [0x18] ', second, third, ')'])
+        stack.simple_unary('[0x0b]')
+      when 0x18 # ternary operator? to_check ? true_val : false_val
+        stack.intermediate do
+          to_check = stack.pop
+          true_val = stack.pop
+          false_val = stack.pop
+          stack << "if #{to_check} > 0: mov %i2, #{true_val}"
+          stack << "if #{to_check} <= 0: mov %i2, #{false_val}"
+        end
       else
         nyi
-        second = stack.pop
-        stack.push(['(', stack.pop, " [0x#{op.to_s(16)}] ", second, ')'])
+        stack.simple_binary("[0x#{op.to_s(16)}]")
       end
     end
 
-    if stack.length != 1
+    self << stack.finalize(register(target))
+
+    unless stack.empty?
       nyi
-      debug "Could not fully parse expression! Stack at the end: #{stack}"
+      debug "Could not fully parse expression! Stack at the end: #{stack.raw_stack}"
     end
-
-    self << "mov #{register(target)}, #{stack.flatten.join} ; calc #{operations.map { |e| e.length == 2 ? [hex(e.first), e.last.to_s] : [hex(e.first)] }.join(' ')}"
+    #self << "mov #{register(target)}, #{stack.flatten.join} ; calc #{operations.map { |e| e.length == 2 ? [hex(e.first), e.last.to_s] : [hex(e.first)] }.join(' ')}"
   end
 
-  def ins_0x43(val1, data)
-    nyi
-    debug "instruction 0x43 (store multiple?), val1: #{val1}, data: #{hex(data)}"
+  def store_in_multiple_registers(value, registers)
+    self << registers.map.with_index { |e, i| "mov #{register(e)}, #{nscify(value)}" }.join(':') + " ; #{value}"
   end
 
-  def lookup(reg, val3, data)
-    self << "movz ?lookup, #{data.map { |e| nscify(e) }.join(', ')} ; #{data.map(&:to_s)}"
-    self << "mov #{register(reg)}, ?lookup[#{nscify(val3)}] ; #{val3}"
+  # Read values[index] to target
+  def lookup_read(target, index, values)
+    self << "movz ?lookup, #{values.map { |e| nscify(e) }.join(', ')} ; #{values.map(&:to_s)} ; lookup_read"
+    self << "mov #{register(target)}, ?lookup[#{nscify(index)}] ; #{index}"
   end
 
-  def ins_0x45(val1, val2, data)
-    nyi
-    debug "instruction 0x45 (store multiple?), val1: #{val1}, val2: #{val2}, data: #{hex(data)}"
+  # Store the given value in the register determined by registers[index]
+  def lookup_store(value, index, registers)
+    self << "movz ?lookup, #{registers.map { |e| register(e) }.join(', ')} ; lookup_store"
+    self << "mov ?lookup[#{nscify(index)}], #{nscify(value)} ; value: #{value}, index: #{index}"
+    self << registers.map.with_index { |e, i| "mov #{register(e)}, ?lookup[#{i}]" }.join(':')
   end
 
   # Control flow
@@ -526,9 +596,9 @@ class OutFile
 
       # Save parameter values that might be overwritten to the pstack
       data.each_with_index do |_, i|
-        lines_before << "mov %psp, %psp + 1:mov ?param_stack[%psp], #{parameter(i)}"
+        lines_before << "inc %psp:mov ?param_stack[%psp], #{parameter(i)}"
       end
-      lines_before << "mov %psp, %psp + 1:mov ?param_stack[%psp], #{data.length}"
+      lines_before << "inc %psp:mov ?param_stack[%psp], #{data.length}"
       # lines_before << "^call0x#{addr.to_s(16)},^%psp^,^#{data.length}^-^?param_stack[%psp]^/"
       if data.length > 0
         # Load new parameter into variable
@@ -569,11 +639,13 @@ class OutFile
   end
 
   def conditional_jump_0x06(val1, val2, addr) # conjecture: checks whether bit is set
-    self << "if #{nscify(val1)} & #{nscify(val2)} != 0 goto *#{address(addr)} ; #{val1} #{val2}"
+    # Ponscripter does not support logical operations, so we have to do this using division...
+    self << "if (#{nscify(val1)} / #{nscify(val2)}) mod 2 == 1 goto *#{address(addr)} ; #{val1} #{val2}"
   end
 
-  def conditional_jump_0x86(val1, val2, addr)
-    nyi; conditional_jump(val1, val2, addr, "[0x86]")
+  def conditional_jump_0x86(val1, val2, addr) # MAYBE checks whether a bit is not set? this could mean that [0x8X] = ![0x0X]
+    # nyi; conditional_jump(val1, val2, addr, "[0x86]")
+    self << "if (#{nscify(val1)} / #{nscify(val2)}) mod 2 == 0 goto *#{address(addr)} ; #{val1} #{val2}"
   end
 
   def ins_0x48(addr)
@@ -652,19 +724,39 @@ class OutFile
 
   def stack_push(values)
     values.each do |value|
-      self << "mov %sp, %sp + 1:mov ?stack[%sp], #{nscify(value)} ; push #{value}"
+      self << "inc %sp:mov ?stack[%sp], #{nscify(value)} ; push #{value}"
     end
   end
 
   def stack_pop(values)
     values.each do |value|
-      self << "mov #{register(value)}, ?stack[%sp]:mov %sp, %sp - 1 ; pop #{hex(value)}"
+      self << "mov #{register(value)}, ?stack[%sp]:dec %sp ; pop #{hex(value)}"
     end
   end
 
-  def ins_0xff(data)
-    nyi
+  def ins_0xff(data) # most likely an external/internal call
+    if data[0] == "NCSELECT"
+      ncselect(data[1].split("\x00").compact)
+    elsif FF_CALLS.key? data[0]
+      nyi
+      # TODO
+    else
+      nyi
+      argument = data[1].is_a?(String) ? ("'" + data[1].split("\x00").join("', '") + "'") : (data.length > 1 ? data[1].map { |e| n = nscify(e); "#{n.delete('%')}=^#{n}^" }.join : '')
+      @h[@offset] << "^0xff '#{data[0]}' " + argument
+    end
     debug "instruction 0xff (data section?) at 0x#{@offset.to_s(16)}, data: #{data}"
+  end
+
+  # An internal selection operation. Sets %r1 to the index of the selected item.
+  # In production use, it will always return the last index (?)
+  def ncselect(options)
+    debug "NCSELECT #{options.join(', ')}"
+    if SNR_PROD
+      self << "mov #{register(1)}, #{options.length - 1}"
+    else
+      raise "Test mode NCSELECT is currently not implemented!"
+    end
   end
 
   # Sprites, resources
@@ -1037,7 +1129,7 @@ file.read_table(bustup_offset) do |n|
   out.offset = file.pos
   len, _ = file.unpack_read('S<')
   name = file.read_shift_jis(len)
-  val1, val2, val3, val4 = file.unpack_read('S<S<S<S<')
+  val1, val2, val3, val4 = file.unpack_read('S<S<S<s<')
   out.bustups[n] = Bustup.new(name, file.pos, val1, val2, val3, val4)
   out << "; Bustup 0x#{n.to_s(16)} at 0x#{file.pos.to_s(16)}: #{name} (val1 = 0x#{val1.to_s(16)}, val2 = 0x#{val2.to_s(16)}, val3 = 0x#{val3.to_s(16)}, val4 = 0x#{val4.to_s(16)})"
 end
@@ -1122,6 +1214,7 @@ section_size, element_count = file.unpack_read('L<L<')
 out << "; Starting script section"
 out << "; Script section size: #{section_size}"
 out << "; Element count: #{element_count}"
+out << "*snr_script_start"
 out.newline
 
 # The loop for parsing the script data
@@ -1468,9 +1561,10 @@ while true do
 
     out.calc(target, operations)
   when 0x43 # ??
-    val1, length = file.unpack_read('CS<')
+    val1, _ = file.read_variable_length(1)
+    length, _ = file.unpack_read('S<')
     data = file.unpack_read('S<' * length)
-    out.ins_0x43(val1, data)
+    out.store_in_multiple_registers(val1, data)
   when 0x44 # ??
     register, _ = file.unpack_read('S<')
     val3, _ = file.read_variable_length(1)
@@ -1482,12 +1576,12 @@ while true do
       data << val
     end
     # data = file.unpack_read('L<' * len)
-    out.lookup(register, val3, data)
+    out.lookup_read(register, val3, data)
   when 0x45 # ??
     val1, val2 = file.read_variable_length(2)
     length, _ = file.unpack_read('S<')
     data = file.unpack_read('S<' * length)
-    out.ins_0x45(val1, val2, data)
+    out.lookup_store(val1, val2, data)
   when 0x46 # conditional jump
     comparison_mode, _ = file.unpack_read('C')
     case comparison_mode

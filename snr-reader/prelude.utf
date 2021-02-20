@@ -35,7 +35,7 @@ numalias psp, 12
 numalias stack, 0
 dim ?stack[256]
 
-; Temporary array used for lookup tables
+; Temporary array used for lookup_read and lookup_store
 numalias lookup, 1
 dim ?lookup[256]
 
