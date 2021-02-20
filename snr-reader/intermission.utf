@@ -1,10 +1,11 @@
 game
 
 *start
-if PONSCRIPTER = 0 skip 2
+if PONSCRIPTER = 0 skip 1
 h_mapfont 0, "default.ttf"
 
 !s0
+textspeed 0
 ;setwindow 300,800,32,3,36,20,0,2,20,1,1,#999999,0,0,1919,1079
 setwindow 100,100,60,3,18,20,0,2,20,1,1,#999999,0,0,1919,1079 ; for debug
 
@@ -53,4 +54,8 @@ return
 
 *ff_bupload
 getparam %ichar, %ibup_cat, %ibup_expr
+return
+
+*ff_bupclear
+getparam %ichar
 return

@@ -39,7 +39,7 @@ HALFWIDTH_REPLACE = '「」ぁぃぅぇぉゃゅょあいうえおかきくけ�
 BG_FOLDER = 'bg'
 BG_EXT = '.png'
 
-BUSTUP_FOLDER = 'bustup'
+SPRITE_FOLDER = 'sprites'
 
 
 # If true, certain internal instructions are ignored while parsing, as they
@@ -62,12 +62,12 @@ class Varlen
     if @first_byte >= 0x80 && @first_byte <= 0x8f
       @mode = :m8
       @value = ((@first_byte & 0xF) << 8) | data.bytes[1]
-      # todo: negative numbers
+      @value = @value - 0xfff if @value > 0x800 # large negative numbers
     elsif @first_byte >= 0x90 && @first_byte <= 0x9f
       @mode = :m9
       # conjectured; I'm somewhat sure that this is big endian
       @value = ((@first_byte & 0xF) << 16) | (data.bytes[1] << 8) | data.bytes[2]
-      # todo: negative numbers?
+      @value = @value - 0xfffff if @value > 0x80000 # large negative numbers
     elsif @first_byte == 0xc0
       @mode = :mc0 # most likely accesses registers > 16
       @value = data.bytes[1]
@@ -185,6 +185,8 @@ class OutFile
     @known_registers = Set.new
     @known_parameters = Set.new
 
+    @dialogue_lines = []
+
     # Counts which NScripter variable is to be used next to provide an alias for registers or function parameters.
     @nsc_variable_counter = 20 # reserve first 20 variables for internal use
 
@@ -200,7 +202,7 @@ class OutFile
   end
 
   attr_accessor :masks, :backgrounds, :bustups, :bgm_tracks, :sound_effects, :movies, :voices, :table8, :table9
-  attr_reader :offset, :script_offset
+  attr_reader :offset, :script_offset, :dialogue_lines
 
   def offset=(value)
     @nyi = false
@@ -365,11 +367,13 @@ class OutFile
   def dialogue(num, var1, length, str)
     # 火凛@r@vkarin0002.｢ｺﾚッ､何だﾖﾟﾞ�ﾄ､取ﾚﾈｪッﾟﾞ｣
     # @rどｺｶ遠ｸでボイラｰが唸ｯﾃｲﾃ､ｿﾉ熱が伝ﾜｯﾃｸﾙ｡･･ｿﾝﾅ感じがｽﾙﾖｳﾅ､気配ﾅﾉだ｡
-    character, line = str.split("@r")
+    character, *lines = str.split("@r")
+    line = lines.join("\n")
     self << "; line #{num}, var1 #{var1}, spoken by #{character}"
     elements = line.split('.')
     self << "^#{character} ~y+10~" # character tag (temporary)
     self << "^#{elements.last}\\" # actual line
+    @dialogue_lines << elements.last
     self << "textclear"
     newline
   end
@@ -794,9 +798,9 @@ class OutFile
     debug "resource command (0xc1) 0x3 (sprite_load?), slot #{slot}, values: #{val1} #{val2} #{sprite_index}"
     self << "#{LookupTable.for("bustup")} #{nscify(sprite_index)}"
 
-    self << %(lsp %ichar, c_bustup_folder + "\\" + $i2 + "\\" + $i2 + ".png", 100, 100)
     self << "itoa_pad $i3, %ibup_expr, 3"
-    self << %(lsp %ichar + 100, c_bustup_folder + "\\" + $i2 + "\\" + $i2 + "_" + $i3 + ".png", 100, 100)
+    self << %(lsph %ichar + 20, c_sprite_folder + "\\" + $i2 + "_" + $i3 + ".png", 0, 0) # regular hidden sprite, for measuring purposes
+    self << %(lsp2 %ichar + 20, c_sprite_folder + "\\" + $i2 + "_" + $i3 + ".png", ?sprite_x_positions[%ichar], ?sprite_y_positions[%ichar], 100, 100, 0)
   end
 
   def resource_command_0x4(slot, val1, val2)
@@ -834,49 +838,71 @@ class OutFile
     debug "sprite command (0xc2) 0x12 (y resize?)"
   end
 
-  def sprite_wait_0x00(val1, val2)
+  def sprite_wait_0x00(slot, val2)
     nyi
-    debug "sprite wait (0xc3) 0x00, values: #{val1} #{val2}"
+    #@h[@offset] << "^spritewait 0x00 slot=^#{nscify(slot)}^,val2=^#{nscify(val2)}"
+    debug "sprite wait (0xc3) 0x00, values: #{slot} #{val2}"
   end
 
-  def sprite_wait_0x01(val1, val2, val3)
+  def sprite_wait_0x01(slot, val2, val3)
     nyi
-    debug "sprite wait (0xc3) 0x01 (alpha?), values: #{val1} #{val2} #{val3}"
+    #@h[@offset] << "^spritewait 0x01 slot=^#{nscify(slot)}^,val2=^#{nscify(val2)}^,val3=^#{nscify(val3)}"
+    debug "sprite wait (0xc3) 0x01 (alpha?), values: #{slot} #{val2} #{val3}"
   end
 
-  def sprite_wait_0x02(val1, val2, val3)
+  def sprite_wait_0x02(slot, val2, val3)
     nyi
-    debug "sprite wait (0xc3) 0x02, values: #{val1} #{val2} #{val3}"
+    #@h[@offset] << "^spritewait 0x02 slot=^#{nscify(slot)}^,val2=^#{nscify(val2)}^,val3=^#{nscify(val3)}"
+    debug "sprite wait (0xc3) 0x02, values: #{slot} #{val2} #{val3}"
   end
 
-  def sprite_wait_0x03(val1, val2, val3, val4)
+  def sprite_wait_0x03(slot, val2, val3, val4)
     nyi
-    debug "sprite wait (0xc3) 0x03, values: #{val1} #{val2} #{val3} #{val4}"
+    #@h[@offset] << "^spritewait 0x03 slot=^#{nscify(slot)}^,val2=^#{nscify(val2)}^,val3=^#{nscify(val3)}^,val4=^#{nscify(val4)}"
+    debug "sprite wait (0xc3) 0x03, values: #{slot} #{val2} #{val3} #{val4}"
   end
 
-  def sprite_wait_0x04(val1, val2, val3)
+  def sprite_wait_0x04(slot, val2, val3)
     nyi
-    debug "sprite wait (0xc3) 0x04, values: #{val1} #{val2} #{val3}"
+    #@h[@offset] << "^spritewait 0x04 slot=^#{nscify(slot)}^,val2=^#{nscify(val2)}^,val3=^#{nscify(val3)}"
+    debug "sprite wait (0xc3) 0x04, values: #{slot} #{val2} #{val3}"
   end
 
-  def sprite_wait_0x05(val1, val2, val3, val4)
+  def sprite_wait_0x05(slot, val2, val3, val4)
     nyi
-    debug "sprite wait (0xc3) 0x05 (x pos?), values: #{val1} #{val2} #{val3} #{val4}"
+    #@h[@offset] << "^spritewait 0x05 slot=^#{nscify(slot)}^,val2=^#{nscify(val2)}^,val3=^#{nscify(val3)}^,val4=^#{nscify(val4)}"
+    debug "sprite wait (0xc3) 0x05 (x pos?), values: #{slot} #{val2} #{val3} #{val4}"
   end
 
-  def sprite_wait_0x06(val1, val2, val3, val4)
+  def sprite_wait_0x06(slot, val2, val3, val4)
     nyi
-    debug "sprite wait (0xc3) 0x06 (y pos?), values: #{val1} #{val2} #{val3} #{val4}"
+    #@h[@offset] << "^spritewait 0x06 slot=^#{nscify(slot)}^,val2=^#{nscify(val2)}^,val3=^#{nscify(val3)}^,val4=^#{nscify(val4)}"
+    debug "sprite wait (0xc3) 0x06 (y pos?), values: #{slot} #{val2} #{val3} #{val4}"
   end
 
-  def sprite_wait_0x07(val1, val2, val3, val4, val5)
+  def sprite_wait_0x07(slot, val2, val3, val4, val5)
     nyi
-    debug "sprite wait (0xc3) 0x07, values: #{val1} #{val2} #{val3} #{val4} #{val5}"
+    #@h[@offset] << "^spritewait 0x07 slot=^#{nscify(slot)}^,val2=^#{nscify(val2)}^,val3=^#{nscify(val3)}^,val4=^#{nscify(val4)}^,val5=^#{nscify(val5)}"
+    debug "sprite wait (0xc3) 0x07, values: #{slot} #{val2} #{val3} #{val4} #{val5}"
   end
 
-  def sprite_wait_0x0f(val1, val2, val3, val4, val5, val6)
-    nyi
-    debug "sprite wait (0xc3) 0x0f, values: #{val1} #{val2} #{val3} #{val4} #{val5} #{val6}"
+  def sprite_set_transform(slot, target, val_x, val_y, val5, val6)
+    raise 'Invalid target for sprite_set_transform' unless target.constant?
+
+    if target.value == 0
+      self << "getspsize %ichar + 20, %i1, %i2"
+      self << "mov %i2, #{nscify(val_y)} + %i2 / 2" # It seems that the sprite X position is based on the center of the sprite, while the Y position uses the top.
+      self << "mov ?sprite_x_positions[%ichar], #{nscify(val_x)}"
+      self << "mov ?sprite_x_positions[%ichar], %i2"
+      self << "amsp2 %ichar + 20, #{nscify(val_x)} + 960, %i2, 100, 100, 0, 255"
+    else
+      # 0x1 = background
+      # 0xd, 0xc, 0x9, 0x12 = ?
+      nyi
+    end
+    debug "sprite wait (0xc3) 0x0f, values: #{slot} #{target} #{val_x} #{val_y} #{val5} #{val6}"
+    #self << "^spritewait 0x0f slot=^#{nscify(slot)}^,target=^#{nscify(target)}^,val_x=^#{nscify(val_x)}^,val_y=^#{nscify(val_y)}^,val5=^#{nscify(val5)}^,val6=^#{nscify(val6)}"
+
   end
 
   def ins_0xc0(slot)
@@ -1116,7 +1142,7 @@ out << "; Aliases for NScripter variables representing SNR registers"
 out.offset = 3
 out << "; Constants"
 out << %(stralias c_bg_folder, "#{BG_FOLDER}")
-out << %(stralias c_bustup_folder, "#{BUSTUP_FOLDER}")
+out << %(stralias c_sprite_folder, "#{SPRITE_FOLDER}")
 
 # Read masks
 Mask = Struct.new(:name, :offset)
@@ -1413,7 +1439,7 @@ while true do
       out.sprite_wait_0x07(val1, val2, val3, val4, val5)
     when 0x0f # anim?
       val3, val4, val5, val6 = file.read_variable_length(4)
-      out.sprite_wait_0x0f(val1, val2, val3, val4, val5, val6)
+      out.sprite_set_transform(val1, val2, val3, val4, val5, val6)
     else
       puts "Unknown sprite wait property"
       break
@@ -1710,3 +1736,4 @@ end
 puts "Writing..."
 
 out.write(ARGV[1]) if ARGV[1]
+File.write(ARGV[3], out.dialogue_lines.join("\n")) if ARGV[3]

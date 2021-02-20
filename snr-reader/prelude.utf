@@ -47,9 +47,22 @@ dim ?lookup[256]
 numalias param_stack, 3
 dim ?param_stack[256]
 
+; Storing sprite properties
+numalias num_sprites, 5
+numalias sprite_x_positions, 5
+numalias sprite_y_positions, 6
+numalias sprite_z_positions, 7
+dim ?sprite_x_positions[num_sprites]
+dim ?sprite_y_positions[num_sprites]
+dim ?sprite_z_positions[num_sprites]
+
 numalias null, -1
 
 defsub restore_params
 defsub itoa_pad
+defsub new_sprite_slot
 
 defsub ff_bupload
+defsub ff_bupclear
+
+effect 8, 15, 500, ".\masks\top.png" ; TODO: find out exact timings

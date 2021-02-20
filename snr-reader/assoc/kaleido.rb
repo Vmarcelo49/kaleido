@@ -19,7 +19,13 @@ ADDRESSES = {
   'addr_0x4f39' => 'l_f_show_background_0x4f2b_px0_not_null',
   'addr_0x4f47' => 'l_f_show_background_0x4f2b_px1_not_null',
 
+  'addr_0x50dc' => 'f_set_sprite_transform',
+
   'addr_0x54d3' => 'f_bg_related_0x54d3',
+
+  'addr_0x6c47' => 'f_hide_all_sprites',
+  'addr_0x6c60' => 'f_hide_all_sprites_loop',
+  'addr_0x6c89' => 'f_hide_all_sprites_done',
 
   # Loads a sprite and displays it.
   # Parameters:
@@ -27,7 +33,9 @@ ADDRESSES = {
   # %px1 is some sort of bit flag: &1 => bupload, &2 => faceload
   # %px2 unknown
   # %px3 = ID of face
-  # %px4-6 unknown yet
+  # %px4 = ?
+  # %px5 = z index (0 => 1900, 1 => 1800, 2 => 1700, 3 => 1600)
+  # %px6 = some flag (if > 0, some stuff is skipped)
   'addr_0x674e' => 'f_show_bustup_sprite',
   'addr_0x6774' => 'l_f_show_bustup_sprite_px2_not_null',
   'addr_0x6796' => 'l_f_show_bustup_sprite_px3_not_null',
@@ -42,6 +50,8 @@ ADDRESSES = {
   'addr_0x6a94' => 'l_f_show_bustup_sprite_start_faceclear',
   'addr_0x6ae3' => 'l_f_show_bustup_sprite_save_return',
   'addr_0x6b2f' => 'l_f_show_bustup_sprite_no_save_return',
+
+  'addr_0x6e87' => 'f_set_sprite_properties_0x6e87',
 
   'addr_0x6eca' => 'f_sound_related_0x6eca',
 
@@ -135,13 +145,19 @@ REGISTERS = {
   0x38 => '%doremi_current_sprite_px5',
   0x39 => '%char4_current_sprite_px5',
 
+  0x3a => '%fuuka_relative_z',
+  0x3b => '%karin_relative_z',
+  0x3c => '%mina_relative_z',
+  0x3d => '%doremi_relative_z',
+  0x3e => '%char4_relative_z',
 
   0x3f => '%rx3f_transition_related',
   0x40 => '%default_transition_duration',
 }
 
 FF_CALLS = {
-  "char:%d bupload(%d,%d)" => "ff_bupload"
+  "char:%d bupload(%d,%d)" => "ff_bupload",
+  "char:%d bupclear" => "ff_bupclear",
 }
 
 # Which labels should be added in addition to the dynamically generated ones
