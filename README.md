@@ -13,9 +13,11 @@ Current status:
  - [x] Backgrounds
    - [ ] Positioning
    - [ ] Animations
+   - [ ] `%TIME%`
  - [ ] Sprites
    - [ ] Positioning
    - [ ] Animations
+   - [ ] `%DRESS%`
  - [ ] BGM
  - [ ] SE
  - [ ] Masks
