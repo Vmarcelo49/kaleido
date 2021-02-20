@@ -10,6 +10,7 @@ if sha256 == '1a41c95be7427ddd3397249fde5be56dfd6f4a8cef20ab27a7a648f31e824dfb'
   load './assoc/kaleido.rb'
 else
   ADDRESSES = {}
+  REGISTERS = {}
   REQUIRE_LABELS = Set.new
   puts "The sha256 of the loaded file does not match the expected value! You are probably trying to load a different SNR file. This may or may not work. Remove the exit statement from this check in the script to continue"
   #exit
@@ -52,10 +53,12 @@ class Varlen
     if @first_byte >= 0x80 && @first_byte <= 0x8f
       @mode = :m8
       @value = ((@first_byte & 0xF) << 8) | data.bytes[1]
+      # todo: negative numbers
     elsif @first_byte >= 0x90 && @first_byte <= 0x9f
       @mode = :m9
       # conjectured; I'm somewhat sure that this is big endian
       @value = ((@first_byte & 0xF) << 16) | (data.bytes[1] << 8) | data.bytes[2]
+      # todo: negative numbers?
     elsif @first_byte == 0xc0
       @mode = :mc0 # most likely accesses registers > 16
       @value = data.bytes[1]
@@ -245,10 +248,11 @@ class OutFile
 
     unless @known_registers.include? num
       @h[2] << "numalias #{raw_register(num).delete('%')}, #{@nsc_variable_counter}"
+      @h[2] << "numalias #{REGISTERS[num].delete('%')}, #{@nsc_variable_counter}" if REGISTERS.key?(num)
       @nsc_variable_counter += 1
       @known_registers << num
     end
-    raw_register(num)
+    REGISTERS[num] || raw_register(num)
   end
 
   def raw_register(num)
@@ -517,10 +521,20 @@ class OutFile
     self << "#{address(addr)} #{data.map { |e| nscify(e) }.join(', ')} ; #{data.map(&:to_s).join(', ')}"
     unless @known_functions.include?(addr)
       @h[1] << "defsub #{address(addr)}"
-      if data.length > 0
-        lines_at_func = (@h[addr] ||= [])
-        lines_at_func.unshift("getparam " + data.map.with_index { |_, i| parameter(i) }.join(", "))
+      lines_at_func = (@h[addr] ||= [])
+      lines_before = []
+
+      # Save parameter values that might be overwritten to the pstack
+      data.each_with_index do |_, i|
+        lines_before << "mov %psp, %psp + 1:mov ?param_stack[%psp], #{parameter(i)}"
       end
+      lines_before << "mov %psp, %psp + 1:mov ?param_stack[%psp], #{data.length}"
+      # lines_before << "^call0x#{addr.to_s(16)},^%psp^,^#{data.length}^-^?param_stack[%psp]^/"
+      if data.length > 0
+        # Load new parameter into variable
+        lines_before << "getparam " + data.map.with_index { |_, i| parameter(i) }.join(", ")
+      end
+      lines_at_func.unshift(lines_before)
       @known_functions << addr
     end
   end
@@ -587,13 +601,21 @@ class OutFile
   end
 
   def return
-    self << "return ;0x#{@offset.to_s(16)}"
+    #self << "^return_at 0x#{@offset.to_s(16)}/"
+    self << "restore_params:return ;0x#{@offset.to_s(16)}"
     newline
   end
 
-  def ins_0x51(val1, val2, val3, val4, data)
-    nyi
-    debug "instruction 0x51, values: #{val1} #{val2} #{val3} #{val4}, data: #{data.map { |e| e.to_s(16) }}"
+  def ins_0x51(reg, val3, val4, data) # conjecture: matching something to a set of values?
+    if val4.value != 0
+      puts "invalid val4 #{hex(val4)}"
+      exit
+    end
+    self << "mov %i1, null ; 0x51 val3: #{val3}"
+    data.each_with_index do |e, i|
+      self << "if #{nscify(val3)} == #{e}: mov %i1, #{i}"
+    end
+    self << "mov #{register(reg)}, %i1"
   end
 
   def ins_0x52
@@ -616,9 +638,9 @@ class OutFile
     debug "instruction 0x82: #{hex(data)}"
   end
 
-  def ins_0x83(mode, val)
-    nyi
-    debug "instruction 0x83, mode: #{hex(mode)}, val: #{val}"
+  def wait_frames(mode, num_frames)
+    self << "mov %i1, #{nscify(num_frames)} * 16 ; wait #{num_frames} frames" # TOOD: more accurate timing
+    self << "wait %i1"
   end
 
   def ins_0x85(val1)
@@ -660,10 +682,10 @@ class OutFile
   def resource_command_0x2(slot, val1, val2, picture_index)
     debug "resource command (0xc1) 0x2 (pic load?), slot #{slot}, values: #{val1} #{val2}, picture index: #{picture_index}"
     if picture_index.constant?
-      self << "bg #{background(picture_index)}, 0"
+      self << "bg #{background(picture_index)}, 1"
     else
       self << "#{LookupTable.for("background")} #{nscify(picture_index)}"
-      self << "bg $i2, 0"
+      self << "bg $i2, 1"
     end
   end
 
@@ -1125,7 +1147,7 @@ while true do
   when 0x83 # ??
     mode, _ = file.unpack_read('C')
     val, _ = file.read_variable_length(1)
-    out.ins_0x83(mode, val)
+    out.wait_frames(mode, val)
   when 0x85 # ??
     val1, _ = file.unpack_read('C')
     out.ins_0x85(val1)
@@ -1355,11 +1377,12 @@ while true do
     out.call(address, data)
   when 0x50 # ?? maybe some kind of return?
     out.return
-  when 0x51 # complex return?
-    val1, val2, val3, val4 = file.read_variable_length(4)
+  when 0x51 # matching to values?
+    reg, _ = file.unpack_read('S<')
+    val3, val4 = file.read_variable_length(2)
     length, _ = file.unpack_read('S<')
-    addresses = file.unpack_read('L<' * length)
-    out.ins_0x51(val1, val2, val3, val4, addresses)
+    data = file.unpack_read('L<' * length)
+    out.ins_0x51(reg, val3, val4, data)
   when 0x52 # ?? maybe some kind of return?
     out.ins_0x52
   when 0x90 # ??

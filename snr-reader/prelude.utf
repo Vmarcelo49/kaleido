@@ -3,7 +3,6 @@
 
 *define
 
-
 ; This is ignored by Ponscripter
 numalias PONSCRIPTER, 0
 
@@ -30,14 +29,20 @@ numalias i8, 8
 numalias i9, 9
 numalias i10, 10
 numalias sp, 11
+numalias psp, 12
 
+; The stack that registers can be pushed to and popped from by SNR instructions.
 numalias stack, 0
 dim ?stack[256]
 
+; Temporary array used for lookup tables
 numalias lookup, 1
 dim ?lookup[256]
 
-numalias null, 0
+; Internal stack used for saving parameter values when calling a function
+numalias param_stack, 3
+dim ?param_stack[256]
 
-defsub stack_push
-defsub stack_pop
+numalias null, -1
+
+defsub restore_params
