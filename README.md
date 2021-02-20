@@ -11,9 +11,14 @@ Current status:
  - [x] Successfully parses the entire file
  - [x] Dialogue
  - [x] Backgrounds
+   - [ ] Positioning
+   - [ ] Animations
  - [ ] Sprites
+   - [ ] Positioning
+   - [ ] Animations
  - [ ] BGM
  - [ ] SE
+ - [ ] Masks
  - [ ] Voices
  - [ ] Choices
  - [ ] Movies
