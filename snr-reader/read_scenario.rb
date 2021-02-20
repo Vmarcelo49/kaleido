@@ -39,6 +39,9 @@ HALFWIDTH_REPLACE = '「」ぁぃぅぇぉゃゅょあいうえおかきくけ�
 BG_FOLDER = 'bg'
 BG_EXT = '.png'
 
+BUSTUP_FOLDER = 'bustup'
+
+
 # If true, certain internal instructions are ignored while parsing, as they
 # are when playing the game normally. If false, it can be considered as
 # "test mode"
@@ -332,7 +335,7 @@ class OutFile
 
   # Remove characters that would not be allowed in nsc identifiers
   def normalize(str)
-    norm = str.gsub(/[^A-Za-z0-9_]/, '')
+    norm = str.tr("１２３４５６７８９０", "1234567890").gsub(/[^A-Za-z0-9_]/, '')
     norm = "X#{norm}" if norm =~ /^[0-9_]/
     norm
   end
@@ -342,6 +345,12 @@ class OutFile
   end
 
   def raw_background(id); "bg_0x#{id.to_s(16)}_#{normalize(@backgrounds[id].name)}"; end
+
+  def bustup(val) # probably unused
+    nscify(val) { |value| raw_bustup(value) }
+  end
+
+  def raw_bustup(id); "bup_0x#{id.to_s(16)}_#{normalize(@bustups[id].name)}"; end
 
   def null; "null"; end
 
@@ -738,8 +747,7 @@ class OutFile
     if data[0] == "NCSELECT"
       ncselect(data[1].split("\x00").compact)
     elsif FF_CALLS.key? data[0]
-      nyi
-      # TODO
+      self << "#{FF_CALLS[data[0]]} #{data[1].map { |e| nscify(e) }.join(', ')}"
     else
       nyi
       argument = data[1].is_a?(String) ? ("'" + data[1].split("\x00").join("', '") + "'") : (data.length > 1 ? data[1].map { |e| n = nscify(e); "#{n.delete('%')}=^#{n}^" }.join : '')
@@ -771,7 +779,7 @@ class OutFile
     debug "resource command (0xc1) 0x1 (load simple?), slot #{slot}, values: #{val1} #{val2} #{val3} #{val4} #{val5} width: #{width} height: #{height}"
   end
 
-  def resource_command_0x2(slot, val1, val2, picture_index)
+  def load_background(slot, val1, val2, picture_index)
     debug "resource command (0xc1) 0x2 (pic load?), slot #{slot}, values: #{val1} #{val2}, picture index: #{picture_index}"
     if picture_index.constant?
       self << "bg #{background(picture_index)}, 1"
@@ -781,9 +789,14 @@ class OutFile
     end
   end
 
-  def resource_command_0x3(slot, val1, val2, val3)
-    nyi
-    debug "resource command (0xc1) 0x3 (sprite_load?), slot #{slot}, values: #{val1} #{val2} #{val3}"
+  def load_sprite(slot, val1, val2, sprite_index)
+    raise "Slot #{slot} is not constant!" unless slot.constant?
+    debug "resource command (0xc1) 0x3 (sprite_load?), slot #{slot}, values: #{val1} #{val2} #{sprite_index}"
+    self << "#{LookupTable.for("bustup")} #{nscify(sprite_index)}"
+
+    self << %(lsp %ichar, c_bustup_folder + "\\" + $i2 + "\\" + $i2 + ".png", 100, 100)
+    self << "itoa_pad $i3, %ibup_expr, 3"
+    self << %(lsp %ichar + 100, c_bustup_folder + "\\" + $i2 + "\\" + $i2 + "_" + $i3 + ".png", 100, 100)
   end
 
   def resource_command_0x4(slot, val1, val2)
@@ -1032,9 +1045,11 @@ class LookupTable
     @current_index = 0
   end
 
-  def append(id, str)
+  # Appends some data.
+  # Data should be in the format [[$i2, "blah"], [%i3, 12345], ...]
+  def append(id, data)
     raise "Invalid ID" if id != @current_index
-    @elements << str
+    @elements << data
     @current_index += 1
   end
 
@@ -1046,7 +1061,11 @@ class LookupTable
     str.puts "tablegoto %i1, " + @elements.map.with_index { |e, i| "*#{entry_for(i)}" }.join(', ')
     str.puts "return"
     @elements.each_with_index do |e, i|
-      str.puts %(*#{entry_for(i)}:mov $i2, #{e}:return)
+      str.write "*#{entry_for(i)}:"
+      e.each do |target, value|
+        str.write "mov #{target}, #{value}:"
+      end
+      str.puts "return"
     end
     str.puts
     str.string
@@ -1094,6 +1113,10 @@ out << "; Functions"
 out.offset = 2
 out << "; Aliases for NScripter variables representing SNR registers"
 
+out.offset = 3
+out << "; Constants"
+out << %(stralias c_bg_folder, "#{BG_FOLDER}")
+out << %(stralias c_bustup_folder, "#{BUSTUP_FOLDER}")
 
 # Read masks
 Mask = Struct.new(:name, :offset)
@@ -1116,7 +1139,9 @@ file.read_table(bg_offset) do |n|
   name.gsub!("%TIME%", "a") # TODO: find out what's up with these %TIME% bgs
   val1, _ = file.unpack_read('S<')
   out.backgrounds[n] = Background.new(name, file.pos, val1)
-  lut.append(n, out.raw_background(n))
+
+  lut.append(n, [["$i2", out.raw_background(n)]])
+
   out << "; Background 0x#{n.to_s(16)} at 0x#{file.pos.to_s(16)}: #{name} (val1 = 0x#{val1.to_s(16)})"
   out << %(stralias #{out.raw_background(n)}, "#{File.join(BG_FOLDER, name + BG_EXT)}")
 end
@@ -1124,16 +1149,25 @@ out.newline
 lut.write_to(out)
 
 # Read bustups
+lut = LookupTable.new("bustup")
 Bustup = Struct.new(:name, :offset, :val1, :val2, :val3, :val4)
 file.read_table(bustup_offset) do |n|
   out.offset = file.pos
   len, _ = file.unpack_read('S<')
   name = file.read_shift_jis(len)
+  name.gsub!("%DRESS%", "首輪")
   val1, val2, val3, val4 = file.unpack_read('S<S<S<s<')
   out.bustups[n] = Bustup.new(name, file.pos, val1, val2, val3, val4)
+
+  lut_entry = []
+  lut_entry << ["$i2", out.raw_bustup(n)]
+  # potentially add more data here? like offsets etc.
+  lut.append(n, lut_entry)
   out << "; Bustup 0x#{n.to_s(16)} at 0x#{file.pos.to_s(16)}: #{name} (val1 = 0x#{val1.to_s(16)}, val2 = 0x#{val2.to_s(16)}, val3 = 0x#{val3.to_s(16)}, val4 = 0x#{val4.to_s(16)})"
+  out << %(stralias #{out.raw_bustup(n)}, "#{name}")
 end
 out.newline
+lut.write_to(out)
 
 # Read BGM
 BGMTrack = Struct.new(:name1, :name2, :offset, :val1)
@@ -1308,10 +1342,10 @@ while true do
       out.resource_command_0x1(slot, val1, val2, val3, val4, val5, val6, val7)
     when 0x2
       val1, val2, val3 = file.read_variable_length(3)
-      out.resource_command_0x2(slot, val1, val2, val3)
+      out.load_background(slot, val1, val2, val3)
     when 0x3
       val1, val2, val3 = file.read_variable_length(3)
-      out.resource_command_0x3(slot, val1, val2, val3)
+      out.load_sprite(slot, val1, val2, val3)
     when 0x4
       val1, val2 = file.read_variable_length(2)
       out.resource_command_0x4(slot, val1, val2)

@@ -31,6 +31,10 @@ numalias i10, 10
 numalias sp, 11
 numalias psp, 12
 
+numalias ichar, 13
+numalias ibup_cat, 14
+numalias ibup_expr, 15
+
 ; The stack that registers can be pushed to and popped from by SNR instructions.
 numalias stack, 0
 dim ?stack[256]
@@ -46,3 +50,6 @@ dim ?param_stack[256]
 numalias null, -1
 
 defsub restore_params
+defsub itoa_pad
+
+defsub ff_bupload
