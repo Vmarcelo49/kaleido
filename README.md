@@ -4,9 +4,13 @@ This is just something I am doing for fun and to get a bit more familiar with re
 
 The bulk of this project is in the `read_scenario.rb` file that parses the `main.snr` file from the Switch release. Extracting and converting the other files is possible e.g. with tools from 07th Mod.
 
-I have not yet tried whether this parsing system will work with Umineko Saku. It will most certainly not work out of the box because Umineko Saku will have a lot of features that Kaleido doesn't have, but it remains to be seen whether Umineko Saku does anything completely differently. In any case, the insights gained from decompiling Kaleido will be useful in future Entergram decompilation projects.
+The script also works with Umineko Saku; this is not a given because the two use slightly different script formats, but it did not take too much effort to make it work for both. Plus, the additional information helped me iron out some areas where I was wrong about how things work. I am now relatively confident that (almost) all instructions are parsed correctly. I still have to figure out how most of them are to be interpreted.
 
-Current status:
+It must be noted that while Kal and Saku do not differ that much from each other (see differences section below), both are very different from previous console VN releases using the SNR format. Previously made tools, like Umineko Project's SNR parser, are essentially useless in parsing Kal's and Saku's SNR format (especially the script section), except for some cases where looking at the code gave me some inspiration on how certain things are to be interpreted.
+
+## Current status:
+
+Applies to both Kal and Saku in theory, although I usually only test with Kal.
 
  - [x] Successfully parses the entire file
  - [x] Dialogue
@@ -27,3 +31,12 @@ Current status:
  - [ ] Menu
  - [ ] Loading, saving
  - [ ] Bonus content
+
+## Differences between Kal and Saku SNR formats
+
+This is not an exhaustive list.
+
+- The bustups are stored slightly differently: in Kal, each bustup only has one name followed by some number values; in Saku, each bustup also has an expression name in addition to the regular one, but there are fewer numbers.
+- In Kal, every voice table entry has exactly two number values; in Saku, there can be arbitrarily many (length-prefixed)
+- In Saku, the current dialogue ID uses three bytes instead of four.
+- The instructions from `0xe0` onwards (except `0xff`) are specific to each game. Kal only uses `0xe0`, Saku uses `0xe0` to `0xe4`

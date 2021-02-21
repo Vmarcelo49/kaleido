@@ -8,12 +8,14 @@ puts sha256
 
 if sha256 == '1a41c95be7427ddd3397249fde5be56dfd6f4a8cef20ab27a7a648f31e824dfb'
   load './assoc/kaleido.rb'
+elsif sha256 == '1537bb6f964e2b3ce5501fc68d86f13b7b483d385f34ea6630a7e4d33758aa82'
+  load './assoc/saku.rb'
 else
   ADDRESSES = {}
   REGISTERS = {}
   FF_CALLS = {}
   REQUIRE_LABELS = Set.new
-  puts "The sha256 of the loaded file does not match the expected value! You are probably trying to load a different SNR file. This may or may not work. Remove the exit statement from this check in the script to continue"
+  puts "The sha256 of the loaded file does not match the expected value! You are probably trying to load a different SNR file. This may or may not work."
   #exit
 end
 
@@ -54,6 +56,10 @@ def byte_print(array, c = 94)
   Kernel.puts array.flatten.map { |e| e.to_s(16).rjust(2, '0') }.join(' ').c(c)
 end
 
+def assert_mode(mode)
+  raise "Invalid mode (#{mode}) for current state, expected #{MODE}" if mode != MODE
+end
+
 # represents a variable-length argument to an instruction
 class Varlen
   attr_reader :data, :mode, :value
@@ -77,14 +83,16 @@ class Varlen
     elsif @first_byte >= 0xd0 && @first_byte <= 0xdf
       @mode = :md # most likely accesses function parameters
       @value = @first_byte & 0xf
-    elsif @first_byte >= 0xe0 && @first_byte <= 0xef
+    elsif @first_byte == 0xe0
       @mode = :me # most likely a sort of null value
       @value = 0
+    elsif (@first_byte >= 0xa0 && @first_byte <= 0xaf) || (@first_byte >= 0xe1 && @first_byte <= 0xff) # these are, as far as I know, unused
+      raise "Invalid varlen first byte: 0x#{@first_byte.to_s(16)}"
     elsif @first_byte >= 0xb0 && @first_byte <= 0xbf
       @mode = :mb # most likely accesses registers
       @value = @first_byte & 0xf
     elsif @first_byte >= 0x40 && @first_byte <= 0x7f
-      @mode = :mneg # most likely negative values
+      @mode = :mraw # most likely negative values
       @value = @first_byte - 128
     else
       @mode = :mraw
@@ -99,7 +107,7 @@ class Varlen
   end
 
   def constant?
-    [:mraw, :mneg, :m8, :m9].include? @mode
+    [:mraw, :m8, :m9].include? @mode
   end
 
   # Returns the constant value; raises an error if this varlen is not
@@ -420,14 +428,19 @@ class OutFile
     debug "instruction 0x8b, argument: #{hex(data)}"
   end
 
-  def ins_0x8d(data)
-    nyi
-    debug "instruction 0x8d, argument: #{hex(data)}"
+  def ins_0x8d(val1, val2, register, val3, code, data)
+    debug "instruction 0x8d, val1: #{hex(val1)}, val2: #{hex(val2)}, register: #{hex(register)}, val3: #{val3}, code: '#{code}', data: '#{data}'"
+
+    if code == "NCSELECT"
+      ncselect(data.split("\x00").compact)
+    else
+      nyi
+    end
   end
 
-  def ins_0x8e_0x2(var1, var2)
+  def ins_0x8e(val1, val2, val3, data)
     nyi
-    debug "instruction 0x8d, var1: #{hex(var1)}, var2: #{hex(var2)}"
+    debug "instruction 0x8e, val1: #{val1}, val2: #{val2}, val3: #{val3}, data: #{data}"
   end
 
   def ins_0x8f
@@ -484,9 +497,9 @@ class OutFile
     self << "mov #{register(reg)}, #{nscify(value1)} - #{nscify(value2)} ; #{value1} #{value2}"
   end
 
-  def register_0x84(reg, value)
+  def register_0x84(reg, value1, value2)
     nyi
-    debug "mov #{register(reg)}, #{register(reg)} [0x84] #{value}"
+    debug "mov #{register(reg)}, #{register(reg)} [0x84] #{value1} #{value2}"
   end
 
   def register_0x87(reg, value1, value2)
@@ -769,17 +782,14 @@ class OutFile
     end
   end
 
-  def ins_0xff(data) # most likely an external/internal call
-    if data[0] == "NCSELECT"
-      ncselect(data[1].split("\x00").compact)
-    elsif FF_CALLS.key? data[0]
-      self << "#{FF_CALLS[data[0]]} #{data[1].map { |e| nscify(e) }.join(', ')}"
+  def ins_0xff(code, arguments) # most likely an external/internal call
+    debug "instruction 0xff (internal call) at 0x#{@offset.to_s(16)}, code: '#{code}', arguments: #{arguments.map(&:to_s).join(', ')}"
+    if FF_CALLS.key? code
+      self << "#{FF_CALLS[code]} #{arguments.map { |e| nscify(e) }.join(', ')}"
     else
       nyi
-      argument = data[1].is_a?(String) ? ("'" + data[1].split("\x00").join("', '") + "'") : (data.length > 1 ? data[1].map { |e| n = nscify(e); "#{n.delete('%')}=^#{n}^" }.join : '')
-      @h[@offset] << "^0xff '#{data[0]}' " + argument
+      self << %(#{code} #{arguments.map { |e| nscify(e) }.join(', ')})
     end
-    debug "instruction 0xff (data section?) at 0x#{@offset.to_s(16)}, data: #{data}"
   end
 
   # An internal selection operation. Sets %r1 to the index of the selected item.
@@ -812,14 +822,22 @@ class OutFile
     debug "resource command (0xc1) 0x1 (load simple?), slot #{slot}, values: #{val1} #{val2} #{val3} #{val4} #{val5} width: #{width} height: #{height}"
   end
 
-  def load_background(slot, val1, val2, picture_index)
-    debug "resource command (0xc1) 0x2 (pic load?), slot #{slot}, values: #{val1} #{val2}, picture index: #{picture_index}"
+  def load_background_0x0(slot, val1)
+    debug "resource command (0xc1) 0x2 (pic load?) mode 0x0, slot #{slot}, val1: #{val1}"
+  end
+
+  def load_background_0x1(slot, val1, picture_index)
+    debug "resource command (0xc1) 0x2 (pic load?) mode 0x1, slot #{slot}, val1: #{val1}, picture index: #{picture_index}"
     if picture_index.constant?
       self << "bg #{background(picture_index)}, 1"
     else
       self << "#{LookupTable.for("background")} #{nscify(picture_index)}"
       self << "bg $i2, 1"
     end
+  end
+
+  def load_background_0x3(slot, val1, val2, picture_index)
+    debug "resource command (0xc1) 0x2 (pic load?) mode 0x3, slot #{slot}, val1: #{val1}, val2: #{val2}, picture index: #{picture_index}"
   end
 
   def load_sprite(slot, val1, mode, sprite_index, val4, val5, val6)
@@ -842,14 +860,29 @@ class OutFile
     debug "resource command (0xc1) 0x4 (anime_load?), slot #{slot}, values: #{val1} #{val2}"
   end
 
-  def resource_command_0x6_0x2(slot, val1)
+  def resource_command_0x6_0x1(slot, val1, data)
     nyi
-    debug "resource command (0xc1) 0x6 0x2, slot #{slot}, values: #{val1}"
+    debug "resource command (0xc1) 0x6 0x2, slot #{slot}, values: #{val1}, data: #{data}"
   end
 
-  def resource_command_0x6_0x3(slot, val1, val3)
+  def resource_command_0x6_0x2(slot, val1, data)
     nyi
-    debug "resource command (0xc1) 0x6 0x3, slot #{slot}, values: #{val1} #{val3}"
+    debug "resource command (0xc1) 0x6 0x2, slot #{slot}, values: #{val1}, data: #{data}"
+  end
+
+  def resource_command_0x6_0x3(slot, val1, val3, data)
+    nyi
+    debug "resource command (0xc1) 0x6 0x3, slot #{slot}, values: #{val1} #{val3}, data: #{data}"
+  end
+
+  def resource_command_0x6_0x5(slot, val1, val3, data)
+    nyi
+    debug "resource command (0xc1) 0x6 0x5, slot #{slot}, values: #{val1} #{val3}, data: #{data}"
+  end
+
+  def resource_command_0x8(slot, val1, val2, val3, val4)
+    nyi
+    debug "resource command (0xc1) 0x8, slot #{slot}, values: #{val1} #{val2} #{val3} val4: #{val4}"
   end
 
   def resource_command_0x9(slot, val1, val2, val3)
@@ -983,14 +1016,14 @@ class OutFile
     debug "instruction 0xcc, val1: #{hex(val1)}"
   end
 
-  def ins_0xcd(val1, val2)
+  def ins_0xcd
     nyi
-    debug "instruction 0xcd, val1: #{hex(val1)}, val2: #{hex(val2)}"
+    debug "instruction 0xcd"
   end
 
-  def ins_0xce(val1)
+  def ins_0xce(val1, val2, val3)
     nyi
-    debug "instruction 0xce, val1: #{hex(val1)}"
+    debug "instruction 0xce, val1: #{val1}, val2: #{val2}, val3: #{val3}"
   end
 
   def ins_0xd0; nyi; debug "instruction 0xd0 (special?)"; end
@@ -1026,9 +1059,9 @@ class OutFile
     debug "instruction 0x92, val1: #{val1}, val2: #{val2}"
   end
 
-  def ins_0x95(channel, sfxid, flag, val1, val2, val3)
+  def ins_0x95(channel, sfxid, val1, val2, val3, val4, val5)
     nyi
-    debug "instruction 0x95 (sfx related?), channel: #{hex(channel)}, sfxid: #{hex(sfxid)}, flag: #{hex(flag)}, val1: #{val1}, val2: #{val2}, val3: #{val3}"
+    debug "instruction 0x95 (sfx related?), channel: #{hex(channel)}, sfxid: #{hex(sfxid)}, val1: #{val1}, val2: #{val2}, val3: #{val3}, val4: #{val4}, val5: #{val5}"
   end
 
   def ins_0x96(channel, val1)
@@ -1085,7 +1118,7 @@ class OutFile
 
   def ins_0xb1(val1, data)
     nyi
-    debug "instruction 0xb1, val1: #{hex(val1)}, data: #{hex(data)}"
+    debug "instruction 0xb1, val1: #{val1}, data: #{data}"
   end
 
   def ins_0xb2(val1)
@@ -1207,7 +1240,7 @@ file.read_table(bg_offset) do |n|
   out.offset = file.pos
   len, _ = file.unpack_read('S<')
   name = file.read_shift_jis(len)
-  name.gsub!("%TIME%", "a") # TODO: find out what's up with these %TIME% bgs
+  name.gsub!("%TIME%", "a") if MODE == :kal # TODO: find out what's up with these %TIME% bgs
   val1, _ = file.unpack_read('S<')
   out.backgrounds[n] = Background.new(name, file.pos, val1)
 
@@ -1218,27 +1251,52 @@ file.read_table(bg_offset) do |n|
 end
 out.newline
 lut.write_to(out)
+puts "Read #{out.backgrounds.length} backgrounds"
 
 # Read bustups
 lut = LookupTable.new("bustup")
-Bustup = Struct.new(:name, :offset, :val1, :val2, :val3, :val4)
+
+if MODE == :kal
+  # In Kal, bustups only have one name, but a bunch of values at the end.
+  Bustup = Struct.new(:name, :offset, :val1, :val2, :val3, :val4)
+else
+  # In Saku, bustups have two strings (what I assume are name and expression), and only one value at the end.
+  Bustup = Struct.new(:name, :expression, :offset, :val1)
+end
+
 file.read_table(bustup_offset) do |n|
   out.offset = file.pos
   len, _ = file.unpack_read('S<')
-  name = file.read_shift_jis(len)
-  name.gsub!("%DRESS%", "首輪")
-  val1, val2, val3, val4 = file.unpack_read('S<S<S<s<')
-  out.bustups[n] = Bustup.new(name, file.pos, val1, val2, val3, val4)
+  if MODE == :kal
+    name = file.read_shift_jis(len)
+    name.gsub!("%DRESS%", "首輪")
+    val1, val2, val3, val4 = file.unpack_read('S<S<S<s<')
+    out.bustups[n] = Bustup.new(name, file.pos, val1, val2, val3, val4)
 
-  lut_entry = []
-  lut_entry << ["$i2", out.raw_bustup(n)]
-  # potentially add more data here? like offsets etc.
-  lut.append(n, lut_entry)
-  out << "; Bustup 0x#{n.to_s(16)} at 0x#{file.pos.to_s(16)}: #{name} (val1 = 0x#{val1.to_s(16)}, val2 = 0x#{val2.to_s(16)}, val3 = 0x#{val3.to_s(16)}, val4 = 0x#{val4.to_s(16)})"
+    lut_entry = []
+    lut_entry << ["$i2", out.raw_bustup(n)]
+    # potentially add more data here? like offsets etc.
+    lut.append(n, lut_entry)
+    out << "; Bustup 0x#{n.to_s(16)} at 0x#{file.pos.to_s(16)}: #{name} (val1 = 0x#{val1.to_s(16)}, val2 = 0x#{val2.to_s(16)}, val3 = 0x#{val3.to_s(16)}, val4 = 0x#{val4.to_s(16)})"
+  else
+    name = file.read_shift_jis(len)
+    len, _ = file.unpack_read('S<')
+    expr = file.read_shift_jis(len)
+    val1, _ = file.unpack_read('S<')
+    out.bustups[n] = Bustup.new(name, expr, file.pos, val1)
+
+    lut_entry = []
+    lut_entry << ["$i2", out.raw_bustup(n)]
+    lut_entry << ["$i3", expr]
+    # potentially add more data here? like offsets etc.
+    lut.append(n, lut_entry)
+    out << "; Bustup 0x#{n.to_s(16)} at 0x#{file.pos.to_s(16)}: #{name} #{expr} (val1 = 0x#{val1.to_s(16)})"
+  end
   out << %(stralias #{out.raw_bustup(n)}, "#{name}")
 end
 out.newline
 lut.write_to(out)
+puts "Read #{out.bustups.length} bustups"
 
 # Read BGM
 lut = LookupTable.new("bgm")
@@ -1262,6 +1320,7 @@ file.read_table(bgm_offset) do |n|
 end
 out.newline
 lut.write_to(out)
+puts "Read #{out.bgm_tracks.length} BGM tracks"
 
 # Read SFX
 SoundEffect = Struct.new(:name, :offset)
@@ -1273,6 +1332,7 @@ file.read_table(se_offset) do |n|
   out << "; Sound effect 0x#{n.to_s(16)} at 0x#{file.pos.to_s(16)}: #{name}"
 end
 out.newline
+puts "Read #{out.sound_effects.length} sound effects"
 
 # Read movies
 Movie = Struct.new(:name, :offset, :val1, :val2, :val3)
@@ -1285,18 +1345,27 @@ file.read_table(movie_offset) do |n|
   out << "; Movie 0x#{n.to_s(16)} at 0x#{file.pos.to_s(16)}: #{name} (val1 = 0x#{val1.to_s(16)}, val2 = 0x#{val2.to_s(16)}, val3 = 0x#{val3.to_s(16)})"
 end
 out.newline
+puts "Read #{out.movies.length} movies"
 
 # Read voices
-Voice = Struct.new(:name, :offset, :val1, :val2)
+Voice = Struct.new(:name, :offset, :values)
 file.read_table(voice_offset) do |n|
   out.offset = file.pos
   len, _ = file.unpack_read('S<')
   name = file.read_shift_jis(len)
-  val1, val2 = file.unpack_read('CC')
-  out.voices[n] = Voice.new(name, file.pos, val1, val2)
-  out << "; Voice 0x#{n.to_s(16)} at 0x#{file.pos.to_s(16)}: #{name} (val1 = 0x#{val1.to_s(16)}, val2 = 0x#{val2.to_s(16)})"
+  if MODE == :kal
+    # Kal always has two values here.
+    values = file.unpack_read('CC')
+  else
+    # Saku has a number of values prefixed with their length.
+    len, _ = file.unpack_read('C')
+    values = file.unpack_read('C' * len)
+  end
+  out.voices[n] = Voice.new(name, file.pos, values)
+  out << "; Voice 0x#{n.to_s(16)} at 0x#{file.pos.to_s(16)}: #{name} (values = #{values.map { |e| e.to_s(16) }.join(' ') })"
 end
 out.newline
+puts "Read #{out.voices.length} voices"
 
 # Read ???
 Table8Entry = Struct.new(:name, :offset, :data)
@@ -1310,6 +1379,7 @@ file.read_table(offset8, length_prefix = false) do |n|
   out << "; table 8 entry 0x#{n.to_s(16)} at 0x#{file.pos.to_s(16)}: #{name} (data: #{data.map { |e| e.to_s(16) } })"
 end
 out.newline
+puts "Read #{out.table8.length} table 8 entries"
 
 # Read ?????
 Table9Entry = Struct.new(:offset, :val1, :val2, :val3)
@@ -1319,6 +1389,7 @@ file.read_table(offset9, length_prefix = false) do |n|
   out.table9[n] = Table9Entry.new(file.pos, val1, val2, val3)
   out << "; table 9 entry 0x#{n.to_s(16)} at 0x#{file.pos.to_s(16)}: val1 = 0x#{val1.to_s(16)}, val2 = 0x#{val2.to_s(16)}, val3 = 0x#{val3.to_s(16)}"
 end
+puts "Read #{out.table9.length} table 9 entries"
 
 out.newline
 
@@ -1348,18 +1419,28 @@ while true do
   when 0x80 # syscall?
     target, _ = file.unpack_read('C')
     out.syscall(target)
+  when 0x81 # only used in saku, maybe "read external" (chiru)?
+    register, _ = file.unpack_read('S<')
+    val1, _ = file.read_variable_length(1)
+    # ins_todo
   when 0x82 # ????????
-    data = file.unpack_read('C' * 7)
+    data = file.unpack_read('C' * 2)
     out.ins_0x82(data)
   when 0x83 # ??
     mode, _ = file.unpack_read('C')
     val, _ = file.read_variable_length(1)
     out.wait_frames(mode, val)
   when 0x85 # ??
-    val1, _ = file.unpack_read('C')
+    val1, _ = file.read_variable_length(1)
     out.ins_0x85(val1)
   when 0x86 # dialogue
-    dialogue_num, var1, length = file.unpack_read('L<CS<')
+    if MODE == :saku
+      # Saku somehow stores the dialogue number in a three-byte integer??
+      dialogue_num_low_bytes, dialogue_num_high_byte, var1, length = file.unpack_read('S<CCS<')
+      dialogue_num = (dialogue_num_high_byte << 16) | dialogue_num_low_bytes
+    else
+      dialogue_num, var1, length = file.unpack_read('L<CS<')
+    end
     str = file.read_shift_jis(length)
     out.dialogue(dialogue_num, var1, length, str)
     break if dialogue_num > max_dialogue
@@ -1367,6 +1448,8 @@ while true do
     argument, _ = file.unpack_read('C')
     puts "Not 0x7F!" if argument != 0x7f
     out.ins_0x87(argument)
+  when 0x88 # only used in saku
+    # out.ins_0x88
   when 0x89 # hide dialogue window?
     argument, _ = file.unpack_read('C')
     puts "Not 0x00!" if argument != 0x00
@@ -1383,28 +1466,26 @@ while true do
     #  break
     #end
     out.ins_0x8b(data)
-  when 0x8d # ?????
-    # only appears as:
-    # 8D 00 00 00 00 01 00 90 0F
-    # or
-    # 8D 00 00 00 00 A2 00 90 0F
-
-    val1, val2, val3 = file.unpack_read('L<S<S<')
-    if val1 != 0 || val3 != 0x0f90
-      puts "Invalid 8d"
-      break
-    end
-    out.ins_0x8d(data)
+  when 0x8d # some kind of internal call
+    val1, val2, register = file.unpack_read('S<S<S<')
+    val3, _ = file.read_variable_length(1)
+    len, _ = file.unpack_read('S<')
+    code = file.read_shift_jis(len)
+    len, _ = file.unpack_read('S<')
+    data = file.read_shift_jis(len)
+    out.ins_0x8d(val1, val2, register, val3, code, data)
   when 0x8e # MAYBE something related to printing?
-    var1, flags = file.unpack_read('CC')
-    case flags
-    when 0x2
-      var2, _ = file.unpack_read('S<')
-      out.ins_0x8e_0x2(var1, var2)
-    else
-      puts "Invalid print flags"
-      break
-    end
+    val1, val2, val3 = file.read_variable_length(3)
+    length_byte, _ = file.unpack_read('C')
+
+    # Count the number of 1 bits in length_byte. Having this be the length
+    # explains all instances of 0x8e I've encountered so far, but I have
+    # absolutely no idea why it would be this way.
+    length = 0
+    while length_byte > 0; length_byte &= length_byte - 1; length += 1; end
+
+    data = file.read_variable_length(length)
+    out.ins_0x8e(val1, val2, val3, data)
   when 0x8f # ??
     out.ins_0x8f
   when 0xc0
@@ -1421,8 +1502,20 @@ while true do
       val1, val2, val3, val4, val5, val6, val7 = file.read_variable_length(7)
       out.resource_command_0x1(slot, val1, val2, val3, val4, val5, val6, val7)
     when 0x2
-      val1, val2, val3 = file.read_variable_length(3)
-      out.load_background(slot, val1, val2, val3)
+      val1, _ = file.read_variable_length(1)
+      mode, _ = file.unpack_read('C')
+      case mode
+      when 0x0 # only used in saku
+        out.load_background_0x0(slot, val1)
+      when 0x1 # used in kal most of the time
+        val2, _ = file.read_variable_length(1)
+        out.load_background_0x1(slot, val1, val2)
+      when 0x3 # used once in kal
+        val2, val3 = file.read_variable_length(1)
+        out.load_background_0x3(slot, val1, val2, val3)
+      else
+        raise "Invalid 0xc1 0x2 mode: 0x#{mode.to_s(16)}"
+      end
     when 0x3
       val1, _ = file.read_variable_length(1)
       mode, _ = file.unpack_read('C')
@@ -1433,6 +1526,8 @@ while true do
       elsif mode == 0xf # The mode actually used to load sprites in kal
         val3, val4, val5, val6 = file.read_variable_length(4)
         out.load_sprite(slot, val1, mode, val3, val4, val5, val6)
+      elsif mode == 0x0 # Used in saku
+        out.load_sprite(slot, val1, mode, nil, nil, nil, nil)
       else
         raise "Invalid 0xc1 0x3 mode: 0x#{mode.to_s(16)}"
       end
@@ -1442,17 +1537,25 @@ while true do
     when 0x6
       val1, val2 = file.unpack_read('CC')
       case val2
+      when 0x01
+        data, _ = file.read_variable_length(1)
+        out.resource_command_0x6_0x1(slot, val1, data)
       when 0x02
         data, _ = file.read_variable_length(1)
-        out.resource_command_0x6_0x2(slot, val1)
+        out.resource_command_0x6_0x2(slot, val1, data)
       when 0x03
-        val3, _ = file.unpack_read('C')
-        data, _ = file.read_variable_length(1)
-        out.resource_command_0x6_0x3(slot, val1, val3)
+        val3, val4 = file.read_variable_length(2)
+        out.resource_command_0x6_0x3(slot, val1, val3, val4)
+      when 0x05
+        val3, val4 = file.read_variable_length(2)
+        out.resource_command_0x6_0x5(slot, val1, val3, val4)
       else
         puts "Unknown resource command 0x06 flag"
         break
       end
+    when 0x8 # only used in saku
+      val1, val2, val3, val4 = file.read_variable_length(4)
+      out.resource_command_0x8(slot, val1, val2, val3, val4)
     when 0x9
       val1, val2, val3 = file.read_variable_length(3)
       out.resource_command_0x9(slot, val1, val2, val3)
@@ -1531,15 +1634,11 @@ while true do
   when 0xcc # special
     val1, _ = file.unpack_read('C')
     out.ins_0xcc(val1)
-  when 0xcd # special
-    val1, val2 = file.unpack_read('CC')
-    out.ins_0xcd(val1, val2)
+  when 0xcd
+    out.ins_0xcd
   when 0xce
-    val, _ = file.unpack_read('L<') # ?
-    out.ins_0xce(val)
-  when 0xe0 # ????
-    data = file.read_variable_length(3)
-    out.ins_0xe0(data)
+    val1, val2, val3 = file.read_variable_length(3)
+    out.ins_0xce(val1, val2, val3)
   when 0x41 # Modify register (very sure about this)
     mode, register = file.unpack_read('CS<')
     data1, _ = file.read_variable_length(1)
@@ -1568,8 +1667,15 @@ while true do
     when 0x83 # two-argument subtraction (register = data1 - data2)
       data2, _ = file.read_variable_length(1)
       out.register_sub2(register, data1, data2)
-    when 0x84 # ?
-      out.register_0x84(register, data1)
+    when 0x84 # ? two_argument multiplication?
+      data2, _ = file.read_variable_length(1)
+      out.register_0x84(register, data1, data2)
+    when 0x85 # ? two_argument division?
+      data2, _ = file.read_variable_length(1)
+      # out.register_0x85(register, data1, data2) # ins_todo
+    when 0x86 # ?
+      data2, _ = file.read_variable_length(1)
+      # out.register_0x86(register, data1, data2) # ins_todo
     when 0x87 # ?
       data2, _ = file.read_variable_length(1)
       out.register_0x87(register, data1, data2)
@@ -1596,22 +1702,24 @@ while true do
     val1, val2, val3, val4 = file.read_variable_length(4)
     out.play_bgm(val1, val2, val3, val4)
   when 0x91 # ??
-    val1, _ = file.unpack_read('C')
+    val1, _ = file.read_variable_length(1)
     out.ins_0x91(val1)
   when 0x92 # ??
     val1, val2 = file.read_variable_length(2)
     out.ins_0x92(val1, val2)
+  when 0x94 # only used in saku
+    val1, _ = file.read_variable_length(1)
+    # out.ins_0x94(val1)
   when 0x95 # sfx related?
     # all of these are hypothetical...
-    channel, sfxid, flag = file.unpack_read('CS<C')
-    var1, var2, var3 = file.read_variable_length(3)
-    out.ins_0x95(channel, sfxid, flag, var1, var2, var3)
+    channel, sfxid, val1, val2, val3, val4, val5 = file.read_variable_length(7)
+    out.ins_0x95(channel, sfxid, val1, val2, val3, val4, val5)
   when 0x96 # also sfx related? some kind of fade?
-    channel, _ = file.unpack_read('C')
+    channel, _ = file.read_variable_length(1)
     var1, _ = file.read_variable_length(1)
     out.ins_0x96(channel, var1)
   when 0x97 # ?? BGM related?
-    argument, _ = file.unpack_read('C')
+    argument, _ = file.read_variable_length(1)
     out.ins_0x97(argument)
   when 0x98 # ??
     val1, val2, val3 = file.read_variable_length(3)
@@ -1622,6 +1730,17 @@ while true do
   when 0x9b # rumble?
     val1, val2, val3, val4, val5 = file.read_variable_length(5)
     out.ins_0x9b(val1, val2, val3, val4, val5)
+  when 0x9c # only used in saku, *probably* plays a voice independent from dialogue?
+    len, _ = file.unpack_read('S<')
+    str = file.read_shift_jis(len) # example of such a string: "02/10800000", which references a voice file where Krauss says "otousan! otousan!
+    val1, val2 = file.read_variable_length(2) # val1 is probably a volume
+    # ins_todo
+  when 0x9e # only used in saku
+    argument, _ = file.read_variable_length(1)
+    # out.ins_0x9e(argument)
+  when 0x9f # ??
+    val1, val2 = file.read_variable_length(2)
+    # out.ins_0x9f(val1, val2)
   when 0xa0 # section title
     type, length = file.unpack_read('CS<')
     str = file.read_shift_jis(length)
@@ -1633,12 +1752,15 @@ while true do
     out.ins_0xa2(argument)
   when 0xa3 # unset timer?
     out.ins_0xa3
+  when 0xa6 # only used in saku
+    val1, val2 = file.unpack_read('CC')
+    # ins_todo
   when 0xb0 # section marker?
     val, _ = file.unpack_read('C')
     out.ins_0xb0(val)
-  when 0xb1 # ?
-    val1, length = file.unpack_read('CS<')
-    data = file.read(length)
+  when 0xb1 # only used in saku
+    val1, len = file.unpack_read('CC')
+    data = file.read_variable_length(len)
     out.ins_0xb1(val1, data)
   when 0xb2 # ??
     val1, _ = file.read_variable_length(1)
@@ -1761,27 +1883,38 @@ while true do
     len, _ = file.unpack_read('C')
     values = file.unpack_read('S<' * len)
     out.stack_pop(values)
-  when 0xff # some kind of data section?
-    data = []
-    loop do
-      byte1 = file.read(1)
-      puts byte1.ord
-      break if byte1 == 0.chr
-      byte2 = file.read(1)
-      if byte2.ord >= 0x80
-        # If the length "appears to" only be one byte, then some non-strings are stored and this is the end of the data section. I think my interpretation in this regard is wrong, but I can't come up with anything better.
-        file.seek(-1, IO::SEEK_CUR)
-        data << file.read_variable_length(byte1.ord)
-        break
-      else
-        length, _ = (byte1 + byte2).unpack('S<')
-        result = file.read_shift_jis(length)
-        puts result
-        data << result
-        break if result.bytes.last == 0
-      end
+  when 0xff # another type of internal call
+    length, _ = file.unpack_read('S<')
+    code = file.read_shift_jis(length)
+    argument_length, _ = file.unpack_read('C')
+    arguments = file.read_variable_length(argument_length)
+    out.ins_0xff(length, arguments)
+  when 0xe0 # specific
+    if MODE == :kal
+      data = file.read_variable_length(3)
+      out.ins_0xe0(data)
+    else
+      assert_mode :saku
+      data = file.read_variable_length(2)
+      # ins_todo
     end
-    out.ins_0xff(data)
+  when 0xe1 # saku specific
+    assert_mode :saku
+    len, _ = file.unpack_read('C')
+    data = file.unpack_read('C' * len)
+    # ins_todo
+  when 0xe2 # saku specific
+    assert_mode :saku
+    data = file.read_variable_length(3)
+    # ins_todo
+  when 0xe3 # saku specific
+    assert_mode :saku
+    data = file.read_variable_length(1)
+    # ins_todo
+  when 0xe4 # saku specific
+    assert_mode :saku
+    data = file.read_variable_length(1)
+    # ins_todo
   else
     puts "Unknown instruction"
     break

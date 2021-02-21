@@ -1,3 +1,5 @@
+MODE = :kal
+
 # Defines associations to make the output file more readable.
 ADDRESSES = {
   # Labels
