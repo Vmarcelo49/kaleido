@@ -1,11 +1,19 @@
 require 'set'
 require 'digest'
 require 'stringio'
-path = ARGV[0]
 
+# colourise string
+class String; def c(a); "\e[#{a}m#{self}\e[0m"; end; end
+
+# Arguments:
+path = ARGV[0] # Input .snr file.
+output_path = ARGV[1] # Output file. (Optional)
+max_dialogue = ARGV[2] ? ARGV[2].to_i : 100000000 # Maximum amount of dialogue that will be parsed, useful if you are trying to quickly prototype some dialogue-independent functionality
+dialogue_path = ARGV[3] # Optional; if present, a file containing only the raw dialogue lines will be written to this location.
+
+# Calculate the SHA256 value of the given script, to find out which mode to use.
 sha256 = Digest::SHA256.hexdigest(File.read(path))
-puts sha256
-
+puts "SHA256: #{sha256}"
 if sha256 == '1a41c95be7427ddd3397249fde5be56dfd6f4a8cef20ab27a7a648f31e824dfb'
   load './assoc/kaleido.rb'
 elsif sha256 == '1537bb6f964e2b3ce5501fc68d86f13b7b483d385f34ea6630a7e4d33758aa82'
@@ -15,15 +23,12 @@ else
   REGISTERS = {}
   FF_CALLS = {}
   REQUIRE_LABELS = Set.new
-  puts "The sha256 of the loaded file does not match the expected value! You are probably trying to load a different SNR file. This may or may not work."
-  #exit
+  puts "Script not recognised! You are probably trying to load a different SNR file than Kal or Saku. This may or may not work."
 end
 
 file = open(path, 'rb')
 
-# colourise string
-class String; def c(a); "\e[#{a}m#{self}\e[0m"; end; end
-
+# Byte lengths represented by Ruby pack/unpack instructions; these are the only supported ones in unpack_read
 LENS = {
   'c' => 1,
   's' => 2,
@@ -31,13 +36,15 @@ LENS = {
   'q' => 8
 }
 
+# Converter to be used for converting from SJIS to UTF-8
 CONVERTER = Encoding::Converter.new('SHIFT_JIS', 'UTF-8', invalid: :replace)
 
-# Entergram uses halfwidth katakana instead of hiragana, probably to save a bit of space. We have to reverse this
+# Entergram uses halfwidth katakana instead of hiragana, probably to save a bit of space. We have to reverse this.
+# Each character in HALFWIDTH will be replaced with the corresponding one in HALFWIDTH_REPLACE
 HALFWIDTH = '｢｣ｧｨｩｪｫｬｭｮｱｲｳｴｵｶｷｸｹｺｻｼｽｾｿﾀﾁﾂﾃﾄﾅﾆﾇﾈﾉﾊﾋﾌﾍﾎﾏﾐﾑﾒﾓﾔﾕﾖﾗﾘﾙﾚﾛﾜｦﾝｰｯ､ﾟﾞ･?｡'
 HALFWIDTH_REPLACE = '「」ぁぃぅぇぉゃゅょあいうえおかきくけこさしすせそたちつてとなにぬねのはひふへほまみむめもやゆよらりるれろわをんーっ、？！…　。'
 
-# File references
+# File references, this is how assets must be stored relative to the output script path.
 BG_FOLDER = 'bg'
 BG_EXT = '.png'
 
@@ -46,21 +53,28 @@ SPRITE_FOLDER = 'sprites'
 BGM_FOLDER = 'bgm'
 SE_FOLDER = 'se'
 
-
-# If true, certain internal instructions are ignored while parsing, as they
+# If true, certain internal instructions (NCSELECT) are ignored while parsing, as they
 # are when playing the game normally. If false, it can be considered as
 # "test mode"
+# Probably only applies to Kal
 SNR_PROD = true
 
+# Prints a set of bytes in the specified colour
 def byte_print(array, c = 94)
   Kernel.puts array.flatten.map { |e| e.to_s(16).rjust(2, '0') }.join(' ').c(c)
 end
 
+# Stop if we are in the wrong mode (e.g. for specific instructions)
 def assert_mode(mode)
   raise "Invalid mode (#{mode}) for current state, expected #{MODE}" if mode != MODE
 end
 
-# represents a variable-length argument to an instruction
+# One of the biggest difference between Kal/Saku and previous games is that
+# a new variable-length argument format is used for most instructions, rather
+# than constant-length arguments.
+# This format can not only represent constant values, but also references to
+# registers and function parameters. Constant values are signed, stored in
+# two's complement format.
 class Varlen
   attr_reader :data, :mode, :value
 
@@ -69,43 +83,45 @@ class Varlen
     @first_byte = data.bytes[0]
 
     if @first_byte >= 0x80 && @first_byte <= 0x8f
+      # Three-byte number
       @mode = :m8
       @value = ((@first_byte & 0xF) << 8) | data.bytes[1]
-      @value = @value - 0xfff if @value > 0x800 # large negative numbers
+      @value = @value - 0xfff if @value > 0x800 # Two's complement signed
     elsif @first_byte >= 0x90 && @first_byte <= 0x9f
+      # Five-byte number
       @mode = :m9
-      # conjectured; I'm somewhat sure that this is big endian
       @value = ((@first_byte & 0xF) << 16) | (data.bytes[1] << 8) | data.bytes[2]
-      @value = @value - 0xfffff if @value > 0x80000 # large negative numbers
+      @value = @value - 0xfffff if @value > 0x80000 # Two's complement signed
+    elsif @first_byte >= 0xb0 && @first_byte <= 0xbf
+      # Access a small register (%rx0 to %rxf)
+      @mode = :mb
+      @value = @first_byte & 0xf
     elsif @first_byte == 0xc0
-      @mode = :mc0 # most likely accesses registers > 16
+      # Access a register larger than %rxf (i.e. %rx10 and onwards)
+      @mode = :mc0
       @value = data.bytes[1]
     elsif @first_byte >= 0xd0 && @first_byte <= 0xdf
-      @mode = :md # most likely accesses function parameters
+      # Access a function parameter
+      @mode = :md
       @value = @first_byte & 0xf
     elsif @first_byte == 0xe0
-      @mode = :me # most likely a sort of null value
+      # Null value
+      @mode = :me
       @value = 0
     elsif (@first_byte >= 0xa0 && @first_byte <= 0xaf) || (@first_byte >= 0xe1 && @first_byte <= 0xff) # these are, as far as I know, unused
       raise "Invalid varlen first byte: 0x#{@first_byte.to_s(16)}"
-    elsif @first_byte >= 0xb0 && @first_byte <= 0xbf
-      @mode = :mb # most likely accesses registers
-      @value = @first_byte & 0xf
     elsif @first_byte >= 0x40 && @first_byte <= 0x7f
-      @mode = :mraw # most likely negative values
+      # Seven-bit number (negative)
+      @mode = :mraw
       @value = @first_byte - 128
     else
+      # Seven-bit number (positive)
       @mode = :mraw
       @value = @first_byte
     end
-
-    # I am convinced that 0xa is a special mode, but it is not used anywhere
-    # so I don't know what it does.
-    # I am not entirely convinced that 0x40-0x7f are not also special modes,
-    # because often e.g. 0x8050 is used in place of 0x50. But I do not know
-    # what they would refer to.
   end
 
+  # Does it represent a constant, non-null value?
   def constant?
     [:mraw, :m8, :m9].include? @mode
   end
@@ -118,6 +134,7 @@ class Varlen
     @value
   end
 
+  # Length in bytes of this varlen
   def length
     @data.length
   end
@@ -128,9 +145,12 @@ class Varlen
   end
 end
 
-# Methods to make it easier to read certain things from the scenario file
+# Monkey-patch some methods into IO to make it easier to read certain things from the scenario file
 class IO
-  # Only supports C/c, S/s, L/l, Q/q at the moment
+  # Read some bytes and unpack into an array according to a given unpack
+  # format specification.
+  # Only supports C/c, S/s, L/l, Q/q at the moment (8, 16, 32, 64 bit, signed
+  # or unsigned)
   def unpack_read(str)
     len = str.downcase.chars.map { |chr| LENS[chr] || 0 }.sum
     exit if len > 1000
@@ -141,36 +161,37 @@ class IO
     result
   end
 
+  # Read a SHIFT-JIS string of the given length. Must be null-terminated
+  # (as all strings are in SNR format)
   def read_shift_jis(len)
     raw = read(len)
     raise 'Not null terminated!' unless raw.chars[-1] == 0.chr
     CONVERTER.convert(raw[0..-2]).tr(HALFWIDTH, HALFWIDTH_REPLACE)
   end
 
+  # Read `len` varlen arguments to an instruction (see Varlen class above)
   def read_variable_length(len)
-    # this is just for parsing. Notes for interpretation:
-    # 8X YZ is *very* likely 0xXYZ
-    # 9X XX XX = ?
-    # A0..BF, C1..FF = registers?
-    # C0 XX = ? (this one likely accesses memory or something)
-
     result = []
     len.times do
       first_byte = read(1)
-      if (first_byte.bytes[0] >= 0x80 && first_byte.bytes[0] <= 0x9f) || first_byte.bytes[0] == 0xc0 #??
+      if (first_byte.bytes[0] >= 0x80 && first_byte.bytes[0] <= 0x9f) || first_byte.bytes[0] == 0xc0
+        # At least two bytes
         second_byte = read(1)
         first_byte += second_byte
-        if first_byte.bytes[0] >= 0x90 && first_byte.bytes[0] <= 0x9f #??
+        if first_byte.bytes[0] >= 0x90 && first_byte.bytes[0] <= 0x9f
+          # Three bytes
           third_byte = read(1)
           first_byte += third_byte
         end
       end
       result << Varlen.new(first_byte)
     end
+    # For debug purposes
     result.each { |v| Kernel.puts v.to_s.c(95) }
     result
   end
 
+  # Read an asset table
   def read_table(offset, length_prefix = true)
     seek(offset)
     if length_prefix
@@ -184,9 +205,10 @@ class IO
   end
 end
 
-
 # Represents an nscripter script file that will be written.
 # This class does most of the snr -> nsc transformation.
+# If you intend to use a different output format, this is the class you will
+# want to change.
 class OutFile
   def initialize(address_offset, script_offset, debug = true)
     # Hash of instruction offset => nscripter lines
@@ -245,6 +267,7 @@ class OutFile
     self << ""
   end
 
+  # Write the created data to the given path
   def write(path)
     file = open(path, 'w')
 
@@ -328,7 +351,7 @@ class OutFile
 
   # If the given variable length object is constant, it will either return that
   # value itself or, if a block is given, the result of that block called with that value.
-  # Otherwise it will return the closest NScripter equivalent to whatever the given val represents.
+  # Otherwise it will return the closest NScripter equivalent to whatever the given varlen represents.
   def nscify(val)
     if val.constant?
       if block_given?
@@ -354,7 +377,7 @@ class OutFile
     end
   end
 
-  # Remove characters that would not be allowed in nsc identifiers
+  # Remove or change characters that would not be allowed in nsc identifiers
   def normalize(str)
     norm = str.tr("１２３４５６７８９０", "1234567890").gsub(/[^A-Za-z0-9_]/, '')
     norm = "X#{norm}" if norm =~ /^[0-9_]/
@@ -1237,9 +1260,6 @@ class LookupTable
   def entry_for(id); "lt_#{@name}_entry_#{id}"; end
 end
 
-# How much dialogue to parse
-max_dialogue = ARGV[2] ? ARGV[2].to_i : 100000000
-
 # Parse file header
 magic = file.read(4)
 if magic != 'SNR '
@@ -1444,6 +1464,7 @@ puts "Read #{out.table9.length} table 9 entries"
 
 out.newline
 
+# Parse script header
 file.seek(script_offset)
 out.offset = script_offset
 section_size, element_count = file.unpack_read('L<L<')
@@ -1966,5 +1987,5 @@ end
 
 puts "Writing..."
 
-out.write(ARGV[1]) if ARGV[1]
-File.write(ARGV[3], out.dialogue_lines.join("\n")) if ARGV[3]
+out.write(output_path) if output_path
+File.write(dialogue_path, out.dialogue_lines.join("\n")) if dialogue_path
