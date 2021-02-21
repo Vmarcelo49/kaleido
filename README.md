@@ -2,7 +2,7 @@
 
 This is just something I am doing for fun and to get a bit more familiar with reverse engineering and VN scripting. Perhaps eventually a PC port of the VN will come out of it.
 
-The bulk of this project is in the `read_scenario.rb` file that parses the `main.snr` file from the Switch release. Extracting and converting the other files is possible e.g. with tools from 07th Mod.
+The bulk of this project is in the [`read_scenario.rb`](https://gitlab.com/Neurochitin/kaleido/-/blob/saku/snr-reader/read_scenario.rb) file that parses the `main.snr` file from the Switch release. Extracting and converting the other files is possible e.g. with tools from 07th Mod.
 
 The output of the script is an NScripter-style script, specifically targeting 07th-mod's fork of Ponscripter, that aims to eventually reproduce the original functionality of the game. If you instead intend to use the result as a reference, it may be more helpful to modify the script to output something more human-readable; I may add an option for this in the future.
 
