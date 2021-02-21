@@ -160,5 +160,8 @@ FF_CALLS = {
   "char:%d bupclear" => "ff_bupclear",
 }
 
+SPRITE_SLOT_MAIN = -6
+
+
 # Which labels should be added in addition to the dynamically generated ones
 REQUIRE_LABELS = Set.new([0x8c19])

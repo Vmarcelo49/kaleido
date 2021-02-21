@@ -99,6 +99,14 @@ class Varlen
     [:mraw, :mneg, :m8, :m9].include? @mode
   end
 
+  # Returns the constant value; raises an error if this varlen is not
+  # constant. Honestly, this might even mean that the parameter is not even
+  # supposed to be a varlen...
+  def value!
+    raise "Expected constant varlen but got #{self}" unless constant?
+    @value
+  end
+
   def length
     @data.length
   end
@@ -365,15 +373,24 @@ class OutFile
   # --------------------------------------- #
 
   def dialogue(num, var1, length, str)
-    # 火凛@r@vkarin0002.｢ｺﾚッ､何だﾖﾟﾞ�ﾄ､取ﾚﾈｪッﾟﾞ｣
-    # @rどｺｶ遠ｸでボイラｰが唸ｯﾃｲﾃ､ｿﾉ熱が伝ﾜｯﾃｸﾙ｡･･ｿﾝﾅ感じがｽﾙﾖｳﾅ､気配ﾅﾉだ｡
-    character, *lines = str.split("@r")
+    # TODO: formatting tags (@b = bold?)
+    character, *lines = str.gsub(/@[b<>]/, '').split("@r")
     line = lines.join("\n")
-    self << "; line #{num}, var1 #{var1}, spoken by #{character}"
+    debug "line #{num}, var1 #{var1}, spoken by #{character}"
+
     elements = line.split('.')
+    line_text = ""
+    elements.each do |e|
+      if e.start_with? '@v'
+        debug "play voice: #{e[2..-1]}"
+      else
+        line_text += e
+      end
+    end
+
     self << "^#{character} ~y+10~" # character tag (temporary)
-    self << "^#{elements.last}\\" # actual line
-    @dialogue_lines << elements.last
+    self << "^#{line_text}\\" # actual line
+    @dialogue_lines << line_text
     self << "textclear"
     newline
   end
@@ -774,8 +791,15 @@ class OutFile
   # Sprites, resources
 
   def resource_command_0x0(slot, val1, val2)
-    nyi
-    debug "resource command (0xc1) 0x0 (remove slot?), slot #{slot}, values: #{val1} #{val2}"
+    # The values, what do they mean?
+
+    case slot.value!
+    when SPRITE_SLOT_MAIN
+      self << "vsp2 %ichar + 20, 0"
+    else
+      nyi
+      debug "resource command (0xc1) 0x0 (remove slot?), slot #{slot}, values: #{val1} #{val2}"
+    end
   end
 
   def resource_command_0x1(slot, val1, val2, val3, val4, val5, width, height)
@@ -794,13 +818,17 @@ class OutFile
   end
 
   def load_sprite(slot, val1, val2, sprite_index)
-    raise "Slot #{slot} is not constant!" unless slot.constant?
-    debug "resource command (0xc1) 0x3 (sprite_load?), slot #{slot}, values: #{val1} #{val2} #{sprite_index}"
-    self << "#{LookupTable.for("bustup")} #{nscify(sprite_index)}"
+    case slot.value!
+    when SPRITE_SLOT_MAIN
+      self << "#{LookupTable.for("bustup")} #{nscify(sprite_index)}"
 
-    self << "itoa_pad $i3, %ibup_expr, 3"
-    self << %(lsph %ichar + 20, c_sprite_folder + "\\" + $i2 + "_" + $i3 + ".png", 0, 0) # regular hidden sprite, for measuring purposes
-    self << %(lsp2 %ichar + 20, c_sprite_folder + "\\" + $i2 + "_" + $i3 + ".png", ?sprite_x_positions[%ichar], ?sprite_y_positions[%ichar], 100, 100, 0)
+      self << "itoa_pad $i3, %ibup_expr, 3"
+      self << %(lsph %ichar + 20, c_sprite_folder + "\\" + $i2 + "_" + $i3 + ".png", 0, 0) # regular hidden sprite, for measuring purposes
+      self << %(lsp2 %ichar + 20, c_sprite_folder + "\\" + $i2 + "_" + $i3 + ".png", ?sprite_x_positions[%ichar], ?sprite_y_positions[%ichar], 100, 100, 0)
+    else
+      nyi
+      debug "resource command (0xc1) 0x3 (sprite_load?), slot #{slot}, values: #{val1} #{val2} #{sprite_index}"
+    end
   end
 
   def resource_command_0x4(slot, val1, val2)
@@ -887,17 +915,21 @@ class OutFile
   end
 
   def sprite_set_transform(slot, target, val_x, val_y, val5, val6)
-    raise 'Invalid target for sprite_set_transform' unless target.constant?
-
-    if target.value == 0
-      self << "getspsize %ichar + 20, %i1, %i2"
-      self << "mov %i2, #{nscify(val_y)} + %i2 / 2" # It seems that the sprite X position is based on the center of the sprite, while the Y position uses the top.
-      self << "mov ?sprite_x_positions[%ichar], #{nscify(val_x)}"
-      self << "mov ?sprite_x_positions[%ichar], %i2"
-      self << "amsp2 %ichar + 20, #{nscify(val_x)} + 960, %i2, 100, 100, 0, 255"
+    case slot.value!
+    when SPRITE_SLOT_MAIN
+      case target.value!
+      when 0 # main sprite?
+        self << "getspsize %ichar + 20, %i1, %i2"
+        self << "mov %i2, #{nscify(val_y)} + %i2 / 2" # It seems that the sprite X position is based on the center of the sprite, while the Y position uses the top.
+        self << "mov ?sprite_x_positions[%ichar], #{nscify(val_x)}"
+        self << "mov ?sprite_y_positions[%ichar], %i2"
+        self << "amsp2 %ichar + 20, #{nscify(val_x)} + 960, %i2, 100, 100, 0, 255"
+      else
+        # 0x1 = background
+        # 0xd, 0xc, 0x9, 0x12 = ?
+        nyi
+      end
     else
-      # 0x1 = background
-      # 0xd, 0xc, 0x9, 0x12 = ?
       nyi
     end
     debug "sprite wait (0xc3) 0x0f, values: #{slot} #{target} #{val_x} #{val_y} #{val5} #{val6}"

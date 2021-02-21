@@ -14,7 +14,7 @@ Current status:
    - [ ] Positioning
    - [ ] Animations
    - [ ] `%TIME%`
- - [ ] Sprites
+ - [x] Sprites (still has a lot of bugs)
    - [ ] Positioning
    - [ ] Animations
    - [ ] `%DRESS%`
