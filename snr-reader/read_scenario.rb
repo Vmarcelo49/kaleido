@@ -413,6 +413,11 @@ class OutFile
     debug "instruction 0x87 (dialogue pipe wait?), argument: #{hex(argument)}"
   end
 
+  def ins_0x88
+    nyi
+    debug "instruction 0x88"
+  end
+
   def ins_0x89(argument, val1)
     nyi
     debug "instruction 0x89 (hide dialogue window?), argument: #{hex(argument)}, val1: #{val1}"
@@ -499,12 +504,22 @@ class OutFile
 
   def register_0x84(reg, value1, value2)
     nyi
-    debug "mov #{register(reg)}, #{register(reg)} [0x84] #{value1} #{value2}"
+    debug "mov #{register(reg)}, #{register(reg)} [0x84] #{value1} #{value2} ; potentially two argument multiplication?"
+  end
+
+  def register_0x85(reg, value1, value2)
+    nyi
+    debug "mov #{register(reg)}, #{register(reg)} [0x85] #{value1} #{value2} ; potentially two argument division?"
+  end
+
+  def register_0x86(reg, value1, value2)
+    nyi
+    debug "mov #{register(reg)}, #{register(reg)} [0x86] #{value1} #{value2} ; potentially two argument or?"
   end
 
   def register_0x87(reg, value1, value2)
     nyi
-    debug "mov #{register(reg)}, #{value1} [0x87] #{value2}"
+    debug "mov #{register(reg)}, #{value1} [0x87] #{value2} ; potentially two argument and?"
   end
 
   # Other register stuff
@@ -751,6 +766,11 @@ class OutFile
   def syscall(target)
     nyi
     debug "syscall #{hex(target)}"
+  end
+
+  def ins_0x81(register, val1)
+    nyi
+    debug "instruction 0x81: register: #{hex(register)}, val1: #{val1}"
   end
 
   def ins_0x82(data)
@@ -1032,11 +1052,6 @@ class OutFile
   def ins_0xd3; nyi; debug "instruction 0xd3 (special?)"; end
   def ins_0xd4; nyi; debug "instruction 0xd4 (special?)"; end
 
-  def ins_0xe0(data)
-    nyi
-    debug "instruction 0xe0, data: #{data}"
-  end
-
   # Sound related
 
   def play_bgm(bgm_id, fadein_frames, val3, val4)
@@ -1057,6 +1072,11 @@ class OutFile
   def ins_0x92(val1, val2)
     nyi
     debug "instruction 0x92, val1: #{val1}, val2: #{val2}"
+  end
+
+  def ins_0x94(val1)
+    nyi
+    debug "instruction 0x94, val1: #{hex(val1)}"
   end
 
   def ins_0x95(channel, sfxid, val1, val2, val3, val4, val5)
@@ -1089,6 +1109,21 @@ class OutFile
     debug "instruction 0x9b (rumble?), val1: #{val1}, val2: #{val2}, val3: #{val3}, val4: #{val4}, val5: #{val5}"
   end
 
+  def play_voice(name, volume, val2)
+    nyi
+    self << "play voice, name: '#{name}', volume: #{volume}, val2: #{val2}"
+  end
+
+  def ins_0x9e(val1)
+    nyi
+    debug "instruction 0x9e (volume related?), val1: #{val1}"
+  end
+
+  def ins_0x9f(val1, val2)
+    nyi
+    debug "instruction 0x9f, val1: #{val1}, val2: #{val2}"
+  end
+
   # Sections, timers
 
   def section_title(type, str)
@@ -1109,6 +1144,11 @@ class OutFile
   def ins_0xa3
     nyi
     debug "instruction 0xa3 (unset timer?)"
+  end
+
+  def ins_0xa6(val1, val2)
+    nyi
+    debug "instruction 0xa6, val1: #{val1}, val2: #{val2}"
   end
 
   def ins_0xb0(val)
@@ -1135,6 +1175,38 @@ class OutFile
   def ins_0xbd; nyi; debug "instruction 0xbd"; end
   def ins_0xbe; nyi; debug "instruction 0xbe"; end
   def ins_0xbf; nyi; debug "instruction 0xbf"; end
+
+  # Game specific instructions
+
+  def ins_0xe0_kal(data)
+    nyi
+    debug "instruction 0xe0 (Kal specific), data: #{data}"
+  end
+
+  def ins_0xe0_saku(data)
+    nyi
+    debug "instruction 0xe0 (Saku specific), data: #{data}"
+  end
+
+  def ins_0xe1_saku(data)
+    nyi
+    debug "instruction 0xe1 (Saku specific), data: #{data}"
+  end
+
+  def ins_0xe2_saku(data)
+    nyi
+    debug "instruction 0xe2 (Saku specific), data: #{data}"
+  end
+
+  def ins_0xe3_saku(data)
+    nyi
+    debug "instruction 0xe3 (Saku specific), data: #{data}"
+  end
+
+  def ins_0xe4_saku(data)
+    nyi
+    debug "instruction 0xe4 (Saku specific), data: #{data}"
+  end
 end
 
 # Generates a number-to-string lookup table in NScripter code. Used to access assets by their IDs.
@@ -1422,7 +1494,7 @@ while true do
   when 0x81 # only used in saku, maybe "read external" (chiru)?
     register, _ = file.unpack_read('S<')
     val1, _ = file.read_variable_length(1)
-    # ins_todo
+    out.ins_0x81(register, val1)
   when 0x82 # ????????
     data = file.unpack_read('C' * 2)
     out.ins_0x82(data)
@@ -1449,7 +1521,7 @@ while true do
     puts "Not 0x7F!" if argument != 0x7f
     out.ins_0x87(argument)
   when 0x88 # only used in saku
-    # out.ins_0x88
+    out.ins_0x88
   when 0x89 # hide dialogue window?
     argument, _ = file.unpack_read('C')
     puts "Not 0x00!" if argument != 0x00
@@ -1461,10 +1533,6 @@ while true do
     out.ins_0x8a(argument)
   when 0x8b # ??
     data = file.unpack_read('CCCCC')
-    #if data[1..-1] != [0x7f, 0x00, 0x00, 0x00]
-    #  puts "Invalid 0x8b"
-    #  break
-    #end
     out.ins_0x8b(data)
   when 0x8d # some kind of internal call
     val1, val2, register = file.unpack_read('S<S<S<')
@@ -1672,10 +1740,10 @@ while true do
       out.register_0x84(register, data1, data2)
     when 0x85 # ? two_argument division?
       data2, _ = file.read_variable_length(1)
-      # out.register_0x85(register, data1, data2) # ins_todo
+      out.register_0x85(register, data1, data2)
     when 0x86 # ?
       data2, _ = file.read_variable_length(1)
-      # out.register_0x86(register, data1, data2) # ins_todo
+      out.register_0x86(register, data1, data2)
     when 0x87 # ?
       data2, _ = file.read_variable_length(1)
       out.register_0x87(register, data1, data2)
@@ -1709,7 +1777,7 @@ while true do
     out.ins_0x92(val1, val2)
   when 0x94 # only used in saku
     val1, _ = file.read_variable_length(1)
-    # out.ins_0x94(val1)
+    out.ins_0x94(val1)
   when 0x95 # sfx related?
     # all of these are hypothetical...
     channel, sfxid, val1, val2, val3, val4, val5 = file.read_variable_length(7)
@@ -1734,13 +1802,13 @@ while true do
     len, _ = file.unpack_read('S<')
     str = file.read_shift_jis(len) # example of such a string: "02/10800000", which references a voice file where Krauss says "otousan! otousan!
     val1, val2 = file.read_variable_length(2) # val1 is probably a volume
-    # ins_todo
+    out.play_voice(str, val1, val2)
   when 0x9e # only used in saku
     argument, _ = file.read_variable_length(1)
-    # out.ins_0x9e(argument)
+    out.ins_0x9e(argument)
   when 0x9f # ??
     val1, val2 = file.read_variable_length(2)
-    # out.ins_0x9f(val1, val2)
+    out.ins_0x9f(val1, val2)
   when 0xa0 # section title
     type, length = file.unpack_read('CS<')
     str = file.read_shift_jis(length)
@@ -1748,13 +1816,13 @@ while true do
   when 0xa1 # set timer?
     out.ins_0xa1
   when 0xa2 # clear timer and disable skip??
-    argument, _ = file.unpack_read('C')
+    argument, _ = file.read_variable_length(1)
     out.ins_0xa2(argument)
   when 0xa3 # unset timer?
     out.ins_0xa3
   when 0xa6 # only used in saku
-    val1, val2 = file.unpack_read('CC')
-    # ins_todo
+    val1, val2 = file.read_variable_length(2)
+    out.ins_0xa6(val1, val2)
   when 0xb0 # section marker?
     val, _ = file.unpack_read('C')
     out.ins_0xb0(val)
@@ -1892,29 +1960,29 @@ while true do
   when 0xe0 # specific
     if MODE == :kal
       data = file.read_variable_length(3)
-      out.ins_0xe0(data)
+      out.ins_0xe0_kal(data)
     else
       assert_mode :saku
       data = file.read_variable_length(2)
-      # ins_todo
+      out.ins_0xe0_saku(data)
     end
   when 0xe1 # saku specific
     assert_mode :saku
     len, _ = file.unpack_read('C')
     data = file.unpack_read('C' * len)
-    # ins_todo
+    out.ins_0xe1_saku(data)
   when 0xe2 # saku specific
     assert_mode :saku
     data = file.read_variable_length(3)
-    # ins_todo
+    out.ins_0xe2_saku(data)
   when 0xe3 # saku specific
     assert_mode :saku
     data = file.read_variable_length(1)
-    # ins_todo
+    out.ins_0xe3_saku(data)
   when 0xe4 # saku specific
     assert_mode :saku
     data = file.read_variable_length(1)
-    # ins_todo
+    out.ins_0xe4_saku(data)
   else
     puts "Unknown instruction"
     break
