@@ -1488,6 +1488,172 @@ while true do
   case instruction
   when 0x00 # exit?
     out.end
+  when 0x40 # ????
+    val1, val2, val3 = file.read_variable_length(3)
+    out.ins_0x40(val1, val2, val3)
+  when 0x41 # Modify register (very sure about this)
+    mode, register = file.unpack_read('CS<')
+    data1, _ = file.read_variable_length(1)
+    case mode
+    when 0x00 # signed assignment?
+      out.register_signed_assign(register, data1)
+    when 0x01
+      out.register_unsigned_assign(register, data1)
+    when 0x02
+      out.register_add(register, data1)
+    when 0x03
+      out.register_sub(register, data1)
+    when 0x04 # multiplication?
+      out.register_mul(register, data1)
+    when 0x05
+      out.register_div(register, data1)
+    when 0x06
+      out.register_or(register, data1)
+    when 0x07
+      out.register_and(register, data1)
+    when 0x08 # ?
+      out.register_0x08(register, data1)
+    when 0x82 # two-argument addition?
+      data2, _ = file.read_variable_length(1)
+      out.register_add2(register, data1, data2)
+    when 0x83 # two-argument subtraction (register = data1 - data2)
+      data2, _ = file.read_variable_length(1)
+      out.register_sub2(register, data1, data2)
+    when 0x84 # ? two_argument multiplication?
+      data2, _ = file.read_variable_length(1)
+      out.register_0x84(register, data1, data2)
+    when 0x85 # ? two_argument division?
+      data2, _ = file.read_variable_length(1)
+      out.register_0x85(register, data1, data2)
+    when 0x86 # ?
+      data2, _ = file.read_variable_length(1)
+      out.register_0x86(register, data1, data2)
+    when 0x87 # ?
+      data2, _ = file.read_variable_length(1)
+      out.register_0x87(register, data1, data2)
+    else
+      puts "Unknown modify register mode"
+      break
+    end
+  when 0x42 # calculation
+    target, _ = file.unpack_read('S<')
+    operations = []
+    loop do
+      byte = file.readbyte
+      byte_print([byte], 96)
+      case byte
+      when 0xff
+        break
+      when 0x00 # push
+        to_push, _ = file.read_variable_length(1)
+        operations << [byte, to_push]
+      else
+        operations << [byte]
+      end
+    end
+
+    out.calc(target, operations)
+  when 0x43 # ??
+    val1, _ = file.read_variable_length(1)
+    length, _ = file.unpack_read('S<')
+    data = file.unpack_read('S<' * length)
+    out.store_in_multiple_registers(val1, data)
+  when 0x44 # ??
+    register, _ = file.unpack_read('S<')
+    val3, _ = file.read_variable_length(1)
+    len, _ = file.unpack_read('S<')
+    data = []
+    len.times do
+      val, _ = file.read_variable_length(1)
+      file.read(4 - val.length)
+      data << val
+    end
+    # data = file.unpack_read('L<' * len)
+    out.lookup_read(register, val3, data)
+  when 0x45 # ??
+    val1, val2 = file.read_variable_length(2)
+    length, _ = file.unpack_read('S<')
+    data = file.unpack_read('S<' * length)
+    out.lookup_store(val1, val2, data)
+  when 0x46 # conditional jump
+    comparison_mode, _ = file.unpack_read('C')
+    case comparison_mode
+    when 0x00
+      val1, val2 = file.read_variable_length(2)
+      address, _ = file.unpack_read('L<')
+      out.conditional_jump_equal(val1, val2, address)
+    when 0x01
+      val1, val2 = file.read_variable_length(2)
+      address, _ = file.unpack_read('L<')
+      out.conditional_jump_inequal(val1, val2, address)
+    when 0x02
+      val1, val2 = file.read_variable_length(2)
+      address, _ = file.unpack_read('L<')
+      out.conditional_jump_greater_than(val1, val2, address)
+    when 0x04
+      val1, val2 = file.read_variable_length(2)
+      address, _ = file.unpack_read('L<')
+      out.conditional_jump_less_or_equal(val1, val2, address)
+    when 0x05
+      val1, val2 = file.read_variable_length(2)
+      address, _ = file.unpack_read('L<')
+      out.conditional_jump_less_than(val1, val2, address)
+    when 0x06
+      val1, val2 = file.read_variable_length(2)
+      address, _ = file.unpack_read('L<')
+      out.conditional_jump_0x06(val1, val2, address)
+    when 0x86
+      val1, val2 = file.read_variable_length(2)
+      address, _ = file.unpack_read('L<')
+      out.conditional_jump_0x86(val1, val2, address)
+    else
+      puts "Unknown comparison mode"
+      break
+    end
+  when 0x47 # jump to address unconditionally ?
+    address, _ = file.unpack_read('L<')
+    out.unconditional_jump(address)
+  when 0x48 # gosub?
+    address, _ = file.unpack_read('L<')
+    out.ins_0x48(address)
+  when 0x49 # return?
+    out.ins_0x49
+  when 0x4a # jump on value?
+    value, _ = file.read_variable_length(1)
+    len, _ = file.unpack_read('S<')
+    targets = file.unpack_read('L<' * len)
+    out.table_goto(value, targets)
+  when 0x4b # another kind of jump on value
+    # register is likely related to val1 from 0x46 0x00
+    register, len = file.unpack_read('CS<')
+    targets = file.unpack_read('L<' * len)
+    out.ins_0x4b(register, targets)
+  when 0x4c # ??
+    data = file.unpack_read('CCCC')
+    out.ins_0x4c(data)
+  when 0x4d # maybe stack push?
+    len, _ = file.unpack_read('C')
+    values = file.read_variable_length(len)
+    out.stack_push(values)
+  when 0x4e # maybe stack pop?
+    len, _ = file.unpack_read('C')
+    values = file.unpack_read('S<' * len)
+    out.stack_pop(values)
+  when 0x4f # function call
+    address, len = file.unpack_read('L<C')
+    puts "Greater than 0xffff!" if address > 0xffff
+    data = file.read_variable_length(len)
+    out.call(address, data)
+  when 0x50 # return from function called with 0x4f
+    out.return
+  when 0x51 # matching to values?
+    reg, _ = file.unpack_read('S<')
+    val3, val4 = file.read_variable_length(2)
+    length, _ = file.unpack_read('S<')
+    data = file.unpack_read('L<' * length)
+    out.ins_0x51(reg, val3, val4, data)
+  when 0x52 # ?? maybe some kind of return?
+    out.ins_0x52
   when 0x80 # syscall?
     target, _ = file.unpack_read('C')
     out.syscall(target)
@@ -1556,6 +1722,70 @@ while true do
     out.ins_0x8e(val1, val2, val3, data)
   when 0x8f # ??
     out.ins_0x8f
+  when 0x90 # ??
+    val1, val2, val3, val4 = file.read_variable_length(4)
+    out.play_bgm(val1, val2, val3, val4)
+  when 0x91 # ??
+    val1, _ = file.read_variable_length(1)
+    out.ins_0x91(val1)
+  when 0x92 # ??
+    val1, val2 = file.read_variable_length(2)
+    out.ins_0x92(val1, val2)
+  when 0x94 # only used in saku
+    val1, _ = file.read_variable_length(1)
+    out.ins_0x94(val1)
+  when 0x95 # sfx related?
+    # all of these are hypothetical...
+    channel, sfxid, val1, val2, val3, val4, val5 = file.read_variable_length(7)
+    out.ins_0x95(channel, sfxid, val1, val2, val3, val4, val5)
+  when 0x96 # also sfx related? some kind of fade?
+    channel, _ = file.read_variable_length(1)
+    var1, _ = file.read_variable_length(1)
+    out.ins_0x96(channel, var1)
+  when 0x97 # ?? BGM related?
+    argument, _ = file.read_variable_length(1)
+    out.ins_0x97(argument)
+  when 0x98 # ??
+    val1, val2, val3 = file.read_variable_length(3)
+    out.ins_0x98(val1, val2, val3)
+  when 0x9a # sound related?
+    val1, val2 = file.read_variable_length(2)
+    out.ins_0x9a(val1, val2)
+  when 0x9b # rumble?
+    val1, val2, val3, val4, val5 = file.read_variable_length(5)
+    out.ins_0x9b(val1, val2, val3, val4, val5)
+  when 0x9c # only used in saku, *probably* plays a voice independent from dialogue?
+    len, _ = file.unpack_read('S<')
+    str = file.read_shift_jis(len) # example of such a string: "02/10800000", which references a voice file where Krauss says "otousan! otousan!
+    val1, val2 = file.read_variable_length(2) # val1 is probably a volume
+    out.play_voice(str, val1, val2)
+  when 0x9e # only used in saku
+    argument, _ = file.read_variable_length(1)
+    out.ins_0x9e(argument)
+  when 0x9f # ??
+    val1, val2 = file.read_variable_length(2)
+    out.ins_0x9f(val1, val2)
+  when 0xa0 # section title
+    type, length = file.unpack_read('CS<')
+    str = file.read_shift_jis(length)
+    out.section_title(type, str)
+  when 0xa1 # set timer?
+    out.ins_0xa1
+  when 0xa2 # clear timer and disable skip??
+    argument, _ = file.read_variable_length(1)
+    out.ins_0xa2(argument)
+  when 0xa3 # unset timer?
+    out.ins_0xa3
+  when 0xa6 # only used in saku
+    val1, val2 = file.read_variable_length(2)
+    out.ins_0xa6(val1, val2)
+  when 0xb0 # section marker?
+    val, _ = file.unpack_read('C')
+    out.ins_0xb0(val)
+  when 0xb1 # only used in saku
+    val1, len = file.unpack_read('CC')
+    data = file.read_variable_length(len)
+    out.ins_0xb1(val1, data)
   when 0xc0
     slot, _ = file.read_variable_length(1)
     out.ins_0xc0(slot)
@@ -1717,251 +1947,6 @@ while true do
   when 0xce
     val1, val2, val3 = file.read_variable_length(3)
     out.ins_0xce(val1, val2, val3)
-  when 0x41 # Modify register (very sure about this)
-    mode, register = file.unpack_read('CS<')
-    data1, _ = file.read_variable_length(1)
-    case mode
-    when 0x00 # signed assignment?
-      out.register_signed_assign(register, data1)
-    when 0x01
-      out.register_unsigned_assign(register, data1)
-    when 0x02
-      out.register_add(register, data1)
-    when 0x03
-      out.register_sub(register, data1)
-    when 0x04 # multiplication?
-      out.register_mul(register, data1)
-    when 0x05
-      out.register_div(register, data1)
-    when 0x06
-      out.register_or(register, data1)
-    when 0x07
-      out.register_and(register, data1)
-    when 0x08 # ?
-      out.register_0x08(register, data1)
-    when 0x82 # two-argument addition?
-      data2, _ = file.read_variable_length(1)
-      out.register_add2(register, data1, data2)
-    when 0x83 # two-argument subtraction (register = data1 - data2)
-      data2, _ = file.read_variable_length(1)
-      out.register_sub2(register, data1, data2)
-    when 0x84 # ? two_argument multiplication?
-      data2, _ = file.read_variable_length(1)
-      out.register_0x84(register, data1, data2)
-    when 0x85 # ? two_argument division?
-      data2, _ = file.read_variable_length(1)
-      out.register_0x85(register, data1, data2)
-    when 0x86 # ?
-      data2, _ = file.read_variable_length(1)
-      out.register_0x86(register, data1, data2)
-    when 0x87 # ?
-      data2, _ = file.read_variable_length(1)
-      out.register_0x87(register, data1, data2)
-    else
-      puts "Unknown modify register mode"
-      break
-    end
-  when 0x4f # function call
-    address, len = file.unpack_read('L<C')
-    puts "Greater than 0xffff!" if address > 0xffff
-    data = file.read_variable_length(len)
-    out.call(address, data)
-  when 0x50 # return from function called with 0x4f
-    out.return
-  when 0x51 # matching to values?
-    reg, _ = file.unpack_read('S<')
-    val3, val4 = file.read_variable_length(2)
-    length, _ = file.unpack_read('S<')
-    data = file.unpack_read('L<' * length)
-    out.ins_0x51(reg, val3, val4, data)
-  when 0x52 # ?? maybe some kind of return?
-    out.ins_0x52
-  when 0x90 # ??
-    val1, val2, val3, val4 = file.read_variable_length(4)
-    out.play_bgm(val1, val2, val3, val4)
-  when 0x91 # ??
-    val1, _ = file.read_variable_length(1)
-    out.ins_0x91(val1)
-  when 0x92 # ??
-    val1, val2 = file.read_variable_length(2)
-    out.ins_0x92(val1, val2)
-  when 0x94 # only used in saku
-    val1, _ = file.read_variable_length(1)
-    out.ins_0x94(val1)
-  when 0x95 # sfx related?
-    # all of these are hypothetical...
-    channel, sfxid, val1, val2, val3, val4, val5 = file.read_variable_length(7)
-    out.ins_0x95(channel, sfxid, val1, val2, val3, val4, val5)
-  when 0x96 # also sfx related? some kind of fade?
-    channel, _ = file.read_variable_length(1)
-    var1, _ = file.read_variable_length(1)
-    out.ins_0x96(channel, var1)
-  when 0x97 # ?? BGM related?
-    argument, _ = file.read_variable_length(1)
-    out.ins_0x97(argument)
-  when 0x98 # ??
-    val1, val2, val3 = file.read_variable_length(3)
-    out.ins_0x98(val1, val2, val3)
-  when 0x9a # sound related?
-    val1, val2 = file.read_variable_length(2)
-    out.ins_0x9a(val1, val2)
-  when 0x9b # rumble?
-    val1, val2, val3, val4, val5 = file.read_variable_length(5)
-    out.ins_0x9b(val1, val2, val3, val4, val5)
-  when 0x9c # only used in saku, *probably* plays a voice independent from dialogue?
-    len, _ = file.unpack_read('S<')
-    str = file.read_shift_jis(len) # example of such a string: "02/10800000", which references a voice file where Krauss says "otousan! otousan!
-    val1, val2 = file.read_variable_length(2) # val1 is probably a volume
-    out.play_voice(str, val1, val2)
-  when 0x9e # only used in saku
-    argument, _ = file.read_variable_length(1)
-    out.ins_0x9e(argument)
-  when 0x9f # ??
-    val1, val2 = file.read_variable_length(2)
-    out.ins_0x9f(val1, val2)
-  when 0xa0 # section title
-    type, length = file.unpack_read('CS<')
-    str = file.read_shift_jis(length)
-    out.section_title(type, str)
-  when 0xa1 # set timer?
-    out.ins_0xa1
-  when 0xa2 # clear timer and disable skip??
-    argument, _ = file.read_variable_length(1)
-    out.ins_0xa2(argument)
-  when 0xa3 # unset timer?
-    out.ins_0xa3
-  when 0xa6 # only used in saku
-    val1, val2 = file.read_variable_length(2)
-    out.ins_0xa6(val1, val2)
-  when 0xb0 # section marker?
-    val, _ = file.unpack_read('C')
-    out.ins_0xb0(val)
-  when 0xb1 # only used in saku
-    val1, len = file.unpack_read('CC')
-    data = file.read_variable_length(len)
-    out.ins_0xb1(val1, data)
-  when 0x40 # ????
-    val1, val2, val3 = file.read_variable_length(3)
-    out.ins_0x40(val1, val2, val3)
-  when 0x42 # calculation
-    target, _ = file.unpack_read('S<')
-    operations = []
-    loop do
-      byte = file.readbyte
-      byte_print([byte], 96)
-      case byte
-      when 0xff
-        break
-      when 0x00 # push
-        to_push, _ = file.read_variable_length(1)
-        operations << [byte, to_push]
-      else
-        operations << [byte]
-      end
-    end
-
-    out.calc(target, operations)
-  when 0x43 # ??
-    val1, _ = file.read_variable_length(1)
-    length, _ = file.unpack_read('S<')
-    data = file.unpack_read('S<' * length)
-    out.store_in_multiple_registers(val1, data)
-  when 0x44 # ??
-    register, _ = file.unpack_read('S<')
-    val3, _ = file.read_variable_length(1)
-    len, _ = file.unpack_read('S<')
-    data = []
-    len.times do
-      val, _ = file.read_variable_length(1)
-      file.read(4 - val.length)
-      data << val
-    end
-    # data = file.unpack_read('L<' * len)
-    out.lookup_read(register, val3, data)
-  when 0x45 # ??
-    val1, val2 = file.read_variable_length(2)
-    length, _ = file.unpack_read('S<')
-    data = file.unpack_read('S<' * length)
-    out.lookup_store(val1, val2, data)
-  when 0x46 # conditional jump
-    comparison_mode, _ = file.unpack_read('C')
-    case comparison_mode
-    when 0x00
-      val1, val2 = file.read_variable_length(2)
-      address, _ = file.unpack_read('L<')
-      out.conditional_jump_equal(val1, val2, address)
-    when 0x01
-      val1, val2 = file.read_variable_length(2)
-      address, _ = file.unpack_read('L<')
-      out.conditional_jump_inequal(val1, val2, address)
-    when 0x02
-      val1, val2 = file.read_variable_length(2)
-      address, _ = file.unpack_read('L<')
-      out.conditional_jump_greater_than(val1, val2, address)
-    when 0x04
-      val1, val2 = file.read_variable_length(2)
-      address, _ = file.unpack_read('L<')
-      out.conditional_jump_less_or_equal(val1, val2, address)
-    when 0x05
-      val1, val2 = file.read_variable_length(2)
-      address, _ = file.unpack_read('L<')
-      out.conditional_jump_less_than(val1, val2, address)
-    when 0x06
-      val1, val2 = file.read_variable_length(2)
-      address, _ = file.unpack_read('L<')
-      out.conditional_jump_0x06(val1, val2, address)
-    when 0x86
-      val1, val2 = file.read_variable_length(2)
-      address, _ = file.unpack_read('L<')
-      out.conditional_jump_0x86(val1, val2, address)
-    else
-      puts "Unknown comparison mode"
-      break
-    end
-  when 0x47 # jump to address unconditionally ?
-    address, _ = file.unpack_read('L<')
-    out.unconditional_jump(address)
-  when 0x48 # gosub?
-    address, _ = file.unpack_read('L<')
-    out.ins_0x48(address)
-  when 0x49 # return?
-    out.ins_0x49
-  when 0x4a # jump on value?
-    value, _ = file.read_variable_length(1)
-    len, _ = file.unpack_read('S<')
-    targets = file.unpack_read('L<' * len)
-    out.table_goto(value, targets)
-  when 0x4b # another kind of jump on value
-    # register is likely related to val1 from 0x46 0x00
-    register, len = file.unpack_read('CS<')
-    targets = file.unpack_read('L<' * len)
-    out.ins_0x4b(register, targets)
-  when 0x4c # ??
-    data = file.unpack_read('CCCC')
-    out.ins_0x4c(data)
-  when 0x4d # maybe stack push?
-    len, _ = file.unpack_read('C')
-    values = file.read_variable_length(len)
-    out.stack_push(values)
-  when 0x4e # maybe stack pop?
-    len, _ = file.unpack_read('C')
-    values = file.unpack_read('S<' * len)
-    out.stack_pop(values)
-  when 0xff # another type of internal call
-    length, _ = file.unpack_read('S<')
-    code = file.read_shift_jis(length)
-    argument_length, _ = file.unpack_read('C')
-    arguments = file.read_variable_length(argument_length)
-    out.ins_0xff(length, arguments)
-  when 0xe0 # specific
-    if MODE == :kal
-      data = file.read_variable_length(3)
-      out.ins_0xe0_kal(data)
-    else
-      assert_mode :saku
-      data = file.read_variable_length(2)
-      out.ins_0xe0_saku(data)
-    end
   when 0xe1 # saku specific
     assert_mode :saku
     len, _ = file.unpack_read('C')
@@ -1979,6 +1964,21 @@ while true do
     assert_mode :saku
     data = file.read_variable_length(1)
     out.ins_0xe4_saku(data)
+  when 0xff # another type of internal call
+    length, _ = file.unpack_read('S<')
+    code = file.read_shift_jis(length)
+    argument_length, _ = file.unpack_read('C')
+    arguments = file.read_variable_length(argument_length)
+    out.ins_0xff(length, arguments)
+  when 0xe0 # specific
+    if MODE == :kal
+      data = file.read_variable_length(3)
+      out.ins_0xe0_kal(data)
+    else
+      assert_mode :saku
+      data = file.read_variable_length(2)
+      out.ins_0xe0_saku(data)
+    end
   else
     puts "Unknown instruction"
     break
