@@ -41,6 +41,9 @@ BG_EXT = '.png'
 
 SPRITE_FOLDER = 'sprites'
 
+BGM_FOLDER = 'bgm'
+SE_FOLDER = 'se'
+
 
 # If true, certain internal instructions are ignored while parsing, as they
 # are when playing the game normally. If false, it can be considered as
@@ -361,6 +364,8 @@ class OutFile
   end
 
   def raw_bustup(id); "bup_0x#{id.to_s(16)}_#{normalize(@bustups[id].name)}"; end
+
+  def raw_bgm_track(id); "bgm_0x#{id}_#{normalize(@bgm_tracks[id].name1)}_#{normalize(@bgm_tracks[id].name2)}"; end
 
   def null; "null"; end
 
@@ -817,7 +822,9 @@ class OutFile
     end
   end
 
-  def load_sprite(slot, val1, val2, sprite_index)
+  def load_sprite(slot, val1, mode, sprite_index, val4, val5, val6)
+    debug "resource command (0xc1) 0x3 (sprite_load?), slot #{slot}, values: #{val1} #{mode} #{sprite_index} val4: #{val4}, val5: #{val5}, val6: #{val6}"
+    return if mode != 0x0f
     case slot.value!
     when SPRITE_SLOT_MAIN
       self << "#{LookupTable.for("bustup")} #{nscify(sprite_index)}"
@@ -827,7 +834,6 @@ class OutFile
       self << %(lsp2 %ichar + 20, c_sprite_folder + "\\" + $i2 + "_" + $i3 + ".png", ?sprite_x_positions[%ichar], ?sprite_y_positions[%ichar], 100, 100, 0)
     else
       nyi
-      debug "resource command (0xc1) 0x3 (sprite_load?), slot #{slot}, values: #{val1} #{val2} #{sprite_index}"
     end
   end
 
@@ -1000,9 +1006,14 @@ class OutFile
 
   # Sound related
 
-  def ins_0x90(data)
-    nyi
-    debug "instruction 0x90, data: #{hex(data)}"
+  def play_bgm(bgm_id, fadein_frames, val3, val4)
+    # val3 some sort of flag (0 or 1)
+    # val4 probably volume
+    #debug "instruction 0x90, bgm_id: #{bgm_id}, fadein_frames: #{fadein_frames}, val3: #{val3}, val4: #{val4}"
+    self << "#{LookupTable.for("bgm")} #{nscify(bgm_id)}"
+    self << "mp3fadein #{nscify(fadein_frames)}"
+    self << %(bgm c_bgm_folder + "\\" + $i2 + ".opus")
+    self << "^Playing BGM '^$i3^'"
   end
 
   def ins_0x91(val1)
@@ -1010,9 +1021,9 @@ class OutFile
     debug "instruction 0x91, val1: #{hex(val1)}"
   end
 
-  def ins_0x92(val1)
+  def ins_0x92(val1, val2)
     nyi
-    debug "instruction 0x92, val1: #{hex(val1)}"
+    debug "instruction 0x92, val1: #{val1}, val2: #{val2}"
   end
 
   def ins_0x95(channel, sfxid, flag, val1, val2, val3)
@@ -1030,9 +1041,9 @@ class OutFile
     debug "instruction 0x97 (bgm related?), channel: #{hex(channel)}"
   end
 
-  def ins_0x98
+  def ins_0x98(val1, val2, val3)
     nyi
-    debug "instruction 0x98"
+    debug "instruction 0x98, val1: #{val1}, val2: #{val2}, val3: #{val3}"
   end
 
   def ins_0x9a(val1, val2)
@@ -1077,9 +1088,9 @@ class OutFile
     debug "instruction 0xb1, val1: #{hex(val1)}, data: #{hex(data)}"
   end
 
-  def ins_0xb2(val)
+  def ins_0xb2(val1)
     nyi
-    debug "instruction 0xb2, val: #{hex(val)}"
+    debug "instruction 0xb2, val1: #{val1}"
   end
 
   def ins_0xbb(val)
@@ -1175,6 +1186,8 @@ out.offset = 3
 out << "; Constants"
 out << %(stralias c_bg_folder, "#{BG_FOLDER}")
 out << %(stralias c_sprite_folder, "#{SPRITE_FOLDER}")
+out << %(stralias c_bgm_folder, "#{BGM_FOLDER}")
+out << %(stralias c_se_folder, "#{SE_FOLDER}")
 
 # Read masks
 Mask = Struct.new(:name, :offset)
@@ -1228,6 +1241,7 @@ out.newline
 lut.write_to(out)
 
 # Read BGM
+lut = LookupTable.new("bgm")
 BGMTrack = Struct.new(:name1, :name2, :offset, :val1)
 file.read_table(bgm_offset) do |n|
   out.offset = file.pos
@@ -1237,9 +1251,17 @@ file.read_table(bgm_offset) do |n|
   name2 = file.read_shift_jis(len2)
   val1, _ = file.unpack_read('S<')
   out.bgm_tracks[n] = BGMTrack.new(name1, name2, file.pos, val1)
+
+  lut_entry = []
+  lut_entry << ["$i2", out.raw_bgm_track(n)]
+  lut_entry << ["$i3", %("#{name2}")]
+  lut.append(n, lut_entry)
+
   out << "; BGM 0x#{n.to_s(16)} at 0x#{file.pos.to_s(16)}: #{name1} #{name2} (val1 = 0x#{val1.to_s(16)})"
+  out << %(stralias #{out.raw_bgm_track(n)}, "#{name1}" ; #{name2})
 end
 out.newline
+lut.write_to(out)
 
 # Read SFX
 SoundEffect = Struct.new(:name, :offset)
@@ -1402,8 +1424,18 @@ while true do
       val1, val2, val3 = file.read_variable_length(3)
       out.load_background(slot, val1, val2, val3)
     when 0x3
-      val1, val2, val3 = file.read_variable_length(3)
-      out.load_sprite(slot, val1, val2, val3)
+      val1, _ = file.read_variable_length(1)
+      mode, _ = file.unpack_read('C')
+      if mode == 0x1
+        # Appears to be a simpler mode, only used during script tests in kal.
+        val3, _ = file.read_variable_length(1)
+        out.load_sprite(slot, val1, mode, val3, nil, nil, nil)
+      elsif mode == 0xf # The mode actually used to load sprites in kal
+        val3, val4, val5, val6 = file.read_variable_length(4)
+        out.load_sprite(slot, val1, mode, val3, val4, val5, val6)
+      else
+        raise "Invalid 0xc1 0x3 mode: 0x#{mode.to_s(16)}"
+      end
     when 0x4
       val1, val2 = file.read_variable_length(2)
       out.resource_command_0x4(slot, val1, val2)
@@ -1505,16 +1537,6 @@ while true do
   when 0xce
     val, _ = file.unpack_read('L<') # ?
     out.ins_0xce(val)
-  when 0xd0 # probably special? d0-d4 often occur together
-    out.ins_0xd0
-  when 0xd1 # probably special? d0-d4 often occur together
-    out.ins_0xd1
-  when 0xd2 # probably special?
-    out.ins_0xd2
-  when 0xd3 # probably special?
-    out.ins_0xd3
-  when 0xd4 # probably special?
-    out.ins_0xd4
   when 0xe0 # ????
     data = file.read_variable_length(3)
     out.ins_0xe0(data)
@@ -1555,12 +1577,12 @@ while true do
       puts "Unknown modify register mode"
       break
     end
-  when 0x4f # very likely calling a procedure
+  when 0x4f # function call
     address, len = file.unpack_read('L<C')
     puts "Greater than 0xffff!" if address > 0xffff
     data = file.read_variable_length(len)
     out.call(address, data)
-  when 0x50 # ?? maybe some kind of return?
+  when 0x50 # return from function called with 0x4f
     out.return
   when 0x51 # matching to values?
     reg, _ = file.unpack_read('S<')
@@ -1571,14 +1593,14 @@ while true do
   when 0x52 # ?? maybe some kind of return?
     out.ins_0x52
   when 0x90 # ??
-    data = file.unpack_read('CCC')
-    out.ins_0x90(data)
+    val1, val2, val3, val4 = file.read_variable_length(4)
+    out.play_bgm(val1, val2, val3, val4)
   when 0x91 # ??
     val1, _ = file.unpack_read('C')
     out.ins_0x91(val1)
   when 0x92 # ??
-    val1, _ = file.unpack_read('C')
-    out.ins_0x92(val1)
+    val1, val2 = file.read_variable_length(2)
+    out.ins_0x92(val1, val2)
   when 0x95 # sfx related?
     # all of these are hypothetical...
     channel, sfxid, flag = file.unpack_read('CS<C')
@@ -1592,7 +1614,8 @@ while true do
     argument, _ = file.unpack_read('C')
     out.ins_0x97(argument)
   when 0x98 # ??
-    out.ins_0x98
+    val1, val2, val3 = file.read_variable_length(3)
+    out.ins_0x98(val1, val2, val3)
   when 0x9a # sound related?
     val1, val2 = file.read_variable_length(2)
     out.ins_0x9a(val1, val2)
@@ -1618,8 +1641,8 @@ while true do
     data = file.read(length)
     out.ins_0xb1(val1, data)
   when 0xb2 # ??
-    val, _ = file.unpack_read('C')
-    out.ins_0xb2(val)
+    val1, _ = file.read_variable_length(1)
+    out.ins_0xb2(val1)
   when 0xb3 # ??
     out.ins_0xb3
   when 0xbb # ??

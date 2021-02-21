@@ -14,6 +14,10 @@ ADDRESSES = {
   'addr_0x4e37' => 'f_perform_transition',
   'addr_0x4e52' => 'f_perform_transition_no_default',
 
+  # %px0 = BGM ID
+  # %px2 = fadein duration in ms?
+  'addr_0x4e97' => 'f_bgm_play',
+
   # This seems to show a background under conditions.
   'addr_0x4f2b' => 'f_show_background_0x4f2b',
   'addr_0x4f39' => 'l_f_show_background_0x4f2b_px0_not_null',
@@ -53,7 +57,14 @@ ADDRESSES = {
 
   'addr_0x6e87' => 'f_set_sprite_properties_0x6e87',
 
-  'addr_0x6eca' => 'f_sound_related_0x6eca',
+  # Likely plays a sound effect, possibly on loop.
+  # %px3 = probably some sort of duration?
+  # %px4 = volume?
+  'addr_0x6eca' => 'f_se_play',
+
+  # %px0 = channel
+  # %px1 = fade out length in ms (internally converted to frames)
+  'addr_0x6f06' => 'f_se_fadeout',
 
   # This function updates rx19 based on a complex lookup table. If it is
   # successful, rx19 is set to px1
