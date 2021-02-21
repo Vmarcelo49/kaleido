@@ -445,7 +445,12 @@ class OutFile
 
   def ins_0x8e(val1, val2, val3, data)
     nyi
-    debug "instruction 0x8e, val1: #{val1}, val2: #{val2}, val3: #{val3}, data: #{data}"
+    debug "instruction 0x8e (related to 0xc9), val1: #{val1}, val2: #{val2}, val3: #{val3}, data: #{data}"
+  end
+
+  def ins_0xc9(val1, val2, val3, data)
+    nyi
+    debug "instruction 0xc9 (related to 0x8e), val1: #{val1}, val2: #{val2}, val3: #{val3}, data: #{data}"
   end
 
   def ins_0x8f
@@ -1016,11 +1021,6 @@ class OutFile
     debug "instruction 0xc7 (some sprite command?), slot: #{slot}, command: #{hex(command)}"
   end
 
-  def ins_0xc9
-    nyi
-    debug "instruction 0xc9 (some kind of marker?)"
-  end
-
   def ins_0xca(register)
     nyi
     debug "instruction 0xca, slot/register: #{hex(register)}"
@@ -1045,12 +1045,6 @@ class OutFile
     nyi
     debug "instruction 0xce, val1: #{val1}, val2: #{val2}, val3: #{val3}"
   end
-
-  def ins_0xd0; nyi; debug "instruction 0xd0 (special?)"; end
-  def ins_0xd1; nyi; debug "instruction 0xd1 (special?)"; end
-  def ins_0xd2; nyi; debug "instruction 0xd2 (special?)"; end
-  def ins_0xd3; nyi; debug "instruction 0xd3 (special?)"; end
-  def ins_0xd4; nyi; debug "instruction 0xd4 (special?)"; end
 
   # Sound related
 
@@ -1160,21 +1154,6 @@ class OutFile
     nyi
     debug "instruction 0xb1, val1: #{val1}, data: #{data}"
   end
-
-  def ins_0xb2(val1)
-    nyi
-    debug "instruction 0xb2, val1: #{val1}"
-  end
-
-  def ins_0xbb(val)
-    nyi
-    debug "instruction 0xbb, val: #{hex(val)}"
-  end
-
-  def ins_0xb3; nyi; debug "instruction 0xb3"; end
-  def ins_0xbd; nyi; debug "instruction 0xbd"; end
-  def ins_0xbe; nyi; debug "instruction 0xbe"; end
-  def ins_0xbf; nyi; debug "instruction 0xbf"; end
 
   # Game specific instructions
 
@@ -1692,8 +1671,18 @@ while true do
     slot, _ = file.read_variable_length(1)
     command, _ = file.unpack_read('C')
     out.ins_0xc7(slot, command)
-  when 0xc9 # some kind of marker?
-    out.ins_0xc9
+  when 0xc9 # kal only, has exactly the same syntax as 0x8e it seems
+    val1, val2, val3 = file.read_variable_length(3)
+    length_byte, _ = file.unpack_read('C')
+
+    # Count the number of 1 bits in length_byte. Having this be the length
+    # explains all instances of 0x8e/0xc9 I've encountered so far, but I have
+    # absolutely no idea why it would be this way.
+    length = 0
+    while length_byte > 0; length_byte &= length_byte - 1; length += 1; end
+
+    data = file.read_variable_length(length)
+    out.ins_0xc9(val1, val2, val3, data)
   when 0xca # acts upon some register or something?
     register, _ = file.unpack_read('C')
     out.ins_0xca(register)
@@ -1830,20 +1819,6 @@ while true do
     val1, len = file.unpack_read('CC')
     data = file.read_variable_length(len)
     out.ins_0xb1(val1, data)
-  when 0xb2 # ??
-    val1, _ = file.read_variable_length(1)
-    out.ins_0xb2(val1)
-  when 0xb3 # ??
-    out.ins_0xb3
-  when 0xbb # ??
-    val, _ = file.unpack_read('C')
-    out.ins_0xbb(val)
-  when 0xbd # ??
-    out.ins_0xbd
-  when 0xbe # ??
-    out.ins_0xbe
-  when 0xbf # ??
-    out.ins_0xbf
   when 0x40 # ????
     val1, val2, val3 = file.read_variable_length(3)
     out.ins_0x40(val1, val2, val3)
