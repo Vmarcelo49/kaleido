@@ -11,8 +11,23 @@ setwindow 100,100,60,3,18,20,0,2,20,1,1,#999999,0,0,1919,1079 ; for debug
 
 mov %sp, 0 ; initialize stack pointer
 mov %psp, 0
-goto *snr_script_start
-;goto *l_scenario_start ; jump to where the script actually starts
+
+fill_array sprite_x_scales, num_sprites, 1000
+fill_array sprite_y_scales, num_sprites, 1000
+
+;goto *snr_script_start
+goto *l_scenario_start ; jump to where the script actually starts
+
+*fill_array ; Fill an array with one value
+getparam %i5, %i6, %i7 ; Array ID, length, value
+*fill_array_loop
+dec %i6
+;^fill_array i5=^%i5^ i6=^%i6^ i7=^%i7
+mov ?%i5[%i6], %i7
+if %i6 <= 0: goto fill_array_done
+goto fill_array_loop
+*fill_array_done
+return
 
 *restore_params ; Restore parameters saved to the pstack
 ;^beforeret^%psp^,^?param_stack[%psp]^/

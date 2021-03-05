@@ -11,7 +11,7 @@ ADDRESSES = {
   'addr_0x4d68' => 'f_init_graphics',
   'addr_0x4dab' => 'f_reset_0x4dab',
 
-  'addr_0x4dd2' => 'f_ins_0x85_related_0x4dd2',
+  'addr_0x4dd2' => 'f_update_text_positioning_mode',
 
   'addr_0x4e37' => 'f_perform_transition',
   'addr_0x4e52' => 'f_perform_transition_no_default',
@@ -21,25 +21,57 @@ ADDRESSES = {
   'addr_0x4e97' => 'f_bgm_play',
 
   # This seems to show a background under conditions.
+  # %px0 = id of background
+  # %px1 = (often null)
   'addr_0x4f2b' => 'f_show_background_0x4f2b',
   'addr_0x4f39' => 'l_f_show_background_0x4f2b_px0_not_null',
   'addr_0x4f47' => 'l_f_show_background_0x4f2b_px1_not_null',
 
-  'addr_0x50dc' => 'f_set_sprite_transform',
+  # %px0 = target value
+  # %px1 = duration
+  # %px2 =
+  # %px3 =
+  'addr_0x50dc' => 'f_set_sprite_x_offset',
 
+  # %px0 = target value
+  # %px1 = duration
+  # %px2 =
+  # %px3 =
+  'addr_0x50fe' => 'f_set_sprite_y_offset',
+
+  # %px0 = target value
+  # %px1 = duration
+  # %px2 =
+  # %px3 =
+  'addr_0x5124' => 'f_set_sprite_zoom',
+
+
+  # Does something relating to transforming currently visible sprites
+  # %px0 = (1 added, then divided by 2)
+  # %px1 = (1 added, then divided by 2)
+  # %px2 = duration
+  'addr_0x52ce' => 'f_sprite_transform_0x52ce',
+
+  # Shows a background with specific position and scaling.
+  # %px0 = id of background
+  # %px1 = (multiplied by 10)
+  # %px2 = (multiplied by 10)
+  # %px3 = (multiplied by 10)
+  # %px4 =
+  # %px5 =
+  # %px6 =
+  # %px7 =
+  # %px8 =
+  # %px9 =
   'addr_0x54d3' => 'f_bg_related_0x54d3',
-
-  'addr_0x6c47' => 'f_hide_all_sprites',
-  'addr_0x6c60' => 'f_hide_all_sprites_loop',
-  'addr_0x6c89' => 'f_hide_all_sprites_done',
 
   # Loads a sprite and displays it.
   # Parameters:
   # %px0 = character number
   # %px1 is some sort of bit flag: &1 => bupload, &2 => faceload
-  # %px2 unknown
+  # %px2 unknown (null or 1)
   # %px3 = ID of face
-  # %px4 = ?
+  # %px4 = ? (null or 1)
   # %px5 = z index (0 => 1900, 1 => 1800, 2 => 1700, 3 => 1600)
   # %px6 = some flag (if > 0, some stuff is skipped)
   'addr_0x674e' => 'f_show_bustup_sprite',
@@ -56,6 +88,10 @@ ADDRESSES = {
   'addr_0x6a94' => 'l_f_show_bustup_sprite_start_faceclear',
   'addr_0x6ae3' => 'l_f_show_bustup_sprite_save_return',
   'addr_0x6b2f' => 'l_f_show_bustup_sprite_no_save_return',
+
+  'addr_0x6c47' => 'f_hide_all_sprites',
+  'addr_0x6c60' => 'f_hide_all_sprites_loop',
+  'addr_0x6c89' => 'f_hide_all_sprites_done',
 
   'addr_0x6e87' => 'f_set_sprite_properties_0x6e87',
 
@@ -115,8 +151,9 @@ ADDRESSES = {
 # 3 = Doremi
 
 REGISTERS = {
-  # 0x11: always either 0 or 1
-  # 0x13: always either 0 or 1
+  0x11 => '%text_positioning_mode_rx11',
+  0x12 => '%text_positioning_mode_rx12',
+  0x13 => '%text_positioning_mode_flag',
 
   0x17 => '%bg_current',
 

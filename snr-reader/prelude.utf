@@ -35,6 +35,8 @@ numalias ichar, 13
 numalias ibup_cat, 14
 numalias ibup_expr, 15
 
+numalias current_slot, 16
+
 ; The stack that registers can be pushed to and popped from by SNR instructions.
 numalias stack, 0
 dim ?stack[256]
@@ -48,16 +50,27 @@ numalias param_stack, 3
 dim ?param_stack[256]
 
 ; Storing sprite properties
-numalias num_sprites, 5
+numalias num_sprites, 128
+
 numalias sprite_x_positions, 5
 numalias sprite_y_positions, 6
 numalias sprite_z_positions, 7
+numalias sprite_x_scales, 8
+numalias sprite_y_scales, 9
+numalias sprite_rotation_angles, 10
+numalias sprite_opacities, 11
+
 dim ?sprite_x_positions[num_sprites]
 dim ?sprite_y_positions[num_sprites]
 dim ?sprite_z_positions[num_sprites]
+dim ?sprite_x_scales[num_sprites]
+dim ?sprite_y_scales[num_sprites]
+dim ?sprite_rotation_angles[num_sprites]
+dim ?sprite_opacities[num_sprites]
 
 numalias null, -1
 
+defsub fill_array
 defsub restore_params
 defsub itoa_pad
 defsub new_sprite_slot

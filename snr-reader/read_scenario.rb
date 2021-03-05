@@ -59,6 +59,9 @@ SE_FOLDER = 'se'
 # Probably only applies to Kal
 SNR_PROD = true
 
+SCREEN_WIDTH = 1920
+SCREEN_HEIGHT = 1080
+
 # Prints a set of bytes in the specified colour
 def byte_print(array, c = 94)
   Kernel.puts array.flatten.map { |e| e.to_s(16).rjust(2, '0') }.join(' ').c(c)
@@ -377,6 +380,14 @@ class OutFile
     end
   end
 
+  # Same as nscify, but if the value is equal to a given constant (specified in
+  # the mappings by SPRITE_SLOT_MAIN) it will return the current_slot variable
+  # instead.
+  def nscify_slot(val)
+    return "127 - %current_slot" if val.constant? && val.value == SPRITE_SLOT_MAIN
+    "127 - #{nscify(val)}"
+  end
+
   # Remove or change characters that would not be allowed in nsc identifiers
   def normalize(str)
     norm = str.tr("１２３４５６７８９０", "1234567890").gsub(/[^A-Za-z0-9_]/, '')
@@ -402,6 +413,24 @@ class OutFile
 
   def nyi
     @nyi = true
+  end
+
+  # ------------------------------------------------ #
+  # - utility methods for frequently-used NSC code - #
+  # ------------------------------------------------ #
+
+  def read_sprite_cache_for_sp2(slot)
+    "?sprite_x_positions[#{slot}] + #{SCREEN_WIDTH / 2}, ?sprite_y_positions[#{slot}] + #{SCREEN_HEIGHT / 2}, ?sprite_x_scales[#{slot}] / 10, ?sprite_y_scales[#{slot}] / 10, ?sprite_rotation_angles[#{slot}]"
+  end
+
+  def load_sprite_cached(slot, to_load)
+    self << %(lsph #{slot}, #{to_load}, 0, 0) # regular hidden sprite, for measuring purposes
+    self << %(lsp2 #{slot}, #{to_load}, #{read_sprite_cache_for_sp2(slot)})
+  end
+
+  def sprite_cache_set(slot, what, value)
+    self << %(mov ?sprite_#{what}s[#{slot}], #{value})
+    self << %(amsp2 #{slot}, #{read_sprite_cache_for_sp2(slot)})
   end
 
   # --------------------------------------- #
@@ -811,9 +840,12 @@ class OutFile
     self << "wait %i1"
   end
 
-  def ins_0x85(val1)
-    nyi
-    debug "instruction 0x85, val1: #{val1}"
+  # Most likely sets the current textbox mode. (ADV/NVL, or special positions maybe?)
+  def ins_0x85(mode)
+    # 0 = ADV (default)
+    # 1 = NVL-ish
+    debug "instruction 0x85 (set text positioning mode), mode: #{mode}"
+    #self << "^ins 0x85, val: ^#{nscify(val1)}"
   end
 
   # Stack related?
@@ -856,13 +888,8 @@ class OutFile
   def resource_command_0x0(slot, val1, val2)
     # The values, what do they mean?
 
-    case slot.value!
-    when SPRITE_SLOT_MAIN
-      self << "vsp2 %ichar + 20, 0"
-    else
-      nyi
-      debug "resource command (0xc1) 0x0 (remove slot?), slot #{slot}, values: #{val1} #{val2}"
-    end
+    debug "resource command (0xc1) 0x0 (remove slot?), slot #{slot}, values: #{val1} #{val2}"
+    self << "vsp2 #{nscify_slot(slot)}, 0"
   end
 
   def resource_command_0x1(slot, val1, val2, val3, val4, val5, width, height)
@@ -871,36 +898,31 @@ class OutFile
   end
 
   def load_background_0x0(slot, val1)
-    debug "resource command (0xc1) 0x2 (pic load?) mode 0x0, slot #{slot}, val1: #{val1}"
+    debug "resource command (0xc1) 0x2 (load background) mode 0x0, slot #{slot}, val1: #{val1}"
   end
 
   def load_background_0x1(slot, val1, picture_index)
-    debug "resource command (0xc1) 0x2 (pic load?) mode 0x1, slot #{slot}, val1: #{val1}, picture index: #{picture_index}"
-    if picture_index.constant?
-      self << "bg #{background(picture_index)}, 1"
-    else
-      self << "#{LookupTable.for("background")} #{nscify(picture_index)}"
-      self << "bg $i2, 1"
-    end
+    debug "resource command (0xc1) 0x2 (load background) mode 0x1, slot #{slot}, val1: #{val1}, picture index: #{picture_index}"
+
+    self << "#{LookupTable.for("background")} #{nscify(picture_index)}"
+    load_sprite_cached(nscify_slot(slot), '$i2')
   end
 
-  def load_background_0x3(slot, val1, val2, picture_index)
-    debug "resource command (0xc1) 0x2 (pic load?) mode 0x3, slot #{slot}, val1: #{val1}, val2: #{val2}, picture index: #{picture_index}"
+  def load_background_0x3(slot, val1, picture_index, val3)
+    debug "resource command (0xc1) 0x2 (load background) mode 0x3, slot #{slot}, val1: #{val1}, picture index: #{picture_index}, val3: #{val3}"
+
+    self << "#{LookupTable.for("background")} #{nscify(picture_index)}"
+    load_sprite_cached(nscify_slot(slot), '$i2')
   end
 
-  def load_sprite(slot, val1, mode, sprite_index, val4, val5, val6)
-    debug "resource command (0xc1) 0x3 (sprite_load?), slot #{slot}, values: #{val1} #{mode} #{sprite_index} val4: #{val4}, val5: #{val5}, val6: #{val6}"
+  def load_sprite(slot, val1, mode, sprite_index, val4, face_id, val6)
+    debug "resource command (0xc1) 0x3 (load bustup sprite), slot #{slot}, values: #{val1} #{mode} #{sprite_index} val4: #{val4}, face_id: #{face_id}, val6: #{val6}"
     return if mode != 0x0f
-    case slot.value!
-    when SPRITE_SLOT_MAIN
-      self << "#{LookupTable.for("bustup")} #{nscify(sprite_index)}"
 
-      self << "itoa_pad $i3, %ibup_expr, 3"
-      self << %(lsph %ichar + 20, c_sprite_folder + "\\" + $i2 + "_" + $i3 + ".png", 0, 0) # regular hidden sprite, for measuring purposes
-      self << %(lsp2 %ichar + 20, c_sprite_folder + "\\" + $i2 + "_" + $i3 + ".png", ?sprite_x_positions[%ichar], ?sprite_y_positions[%ichar], 100, 100, 0)
-    else
-      nyi
-    end
+    self << "#{LookupTable.for("bustup")} #{nscify(sprite_index)}"
+
+    self << "itoa_pad $i3, #{nscify(face_id)}, 3"
+    load_sprite_cached(nscify_slot(slot), 'c_sprite_folder + "\" + $i2 + "_" + $i3 + ".png"')
   end
 
   def resource_command_0x4(slot, val1, val2)
@@ -1001,16 +1023,29 @@ class OutFile
     debug "sprite wait (0xc3) 0x07, values: #{slot} #{val2} #{val3} #{val4} #{val5}"
   end
 
-  def sprite_set_transform(slot, target, val_x, val_y, val5, val6)
+  def sprite_set_transform(slot, target, value, duration, val5, val6)
+    debug "sprite wait (0xc3) 0x0f, values: #{slot} #{target} #{value} #{duration} #{val5} #{val6}"
+    #self << "^spritewait 0x0f slot=^#{nscify(slot)}^,target=^#{nscify(target)}^,value=^#{nscify(value)}^,duration=^#{nscify(duration)}^,val5=^#{nscify(val5)}^,val6=^#{nscify(val6)}"
     case slot.value!
     when SPRITE_SLOT_MAIN
       case target.value!
-      when 0 # main sprite?
-        self << "getspsize %ichar + 20, %i1, %i2"
-        self << "mov %i2, #{nscify(val_y)} + %i2 / 2" # It seems that the sprite X position is based on the center of the sprite, while the Y position uses the top.
-        self << "mov ?sprite_x_positions[%ichar], #{nscify(val_x)}"
-        self << "mov ?sprite_y_positions[%ichar], %i2"
-        self << "amsp2 %ichar + 20, #{nscify(val_x)} + 960, %i2, 100, 100, 0, 255"
+      when 0x00 # X position
+        #self << "getspsize #{nscify_slot(slot)}, %i1, %i2"
+        #self << "mov %i2, #{nscify(duration)} + %i2 / 2" # It seems that the sprite X position is based on the center of the sprite, while the Y position uses the top.
+        #self << "mov ?sprite_x_positions[#{nscify_slot(slot)}], #{nscify(value)}"
+        #self << "mov ?sprite_y_positions[#{nscify_slot(slot)}], %i2"
+        #self << "amsp2 #{nscify_slot(slot)}, #{nscify(value)} + 960, %i2, 100, 100, 0, 255"
+        self << "mov %i2, #{nscify(value)} + 0"
+        sprite_cache_set(nscify_slot(slot), "x_position", "%i2")
+      when 0x01 # Y position
+        self << "mov %i2, #{nscify(value)} + 0"
+        sprite_cache_set(nscify_slot(slot), "y_position", "%i2")
+      when 0x0c # X (?) scaling
+        self << "mov %i2, #{nscify(value)} / 1"
+        sprite_cache_set(nscify_slot(slot), "x_scale", "%i2")
+      when 0x0d # Y (?) scaling
+        self << "mov %i2, #{nscify(value)} / 1"
+        sprite_cache_set(nscify_slot(slot), "y_scale", "%i2")
       else
         # 0x1 = background
         # 0xd, 0xc, 0x9, 0x12 = ?
@@ -1019,9 +1054,6 @@ class OutFile
     else
       nyi
     end
-    debug "sprite wait (0xc3) 0x0f, values: #{slot} #{target} #{val_x} #{val_y} #{val5} #{val6}"
-    #self << "^spritewait 0x0f slot=^#{nscify(slot)}^,target=^#{nscify(target)}^,val_x=^#{nscify(val_x)}^,val_y=^#{nscify(val_y)}^,val5=^#{nscify(val5)}^,val6=^#{nscify(val6)}"
-
   end
 
   def ins_0xc0(slot)
@@ -1034,9 +1066,11 @@ class OutFile
     debug "instruction 0xc0, target: #{target}, data: #{data}"
   end
 
+  # WILD GUESS: this sets the value of the 0x7a (-6) sprite slot? unclear
+  # what the second ID is for though
   def ins_0xc6(id1, id2)
-    nyi
-    debug "instruction 0xc6 (load sprite?), id1: #{id1}, id2: #{id2}"
+    debug "instruction 0xc6 (set current slot?), id1: #{id1}, id2: #{id2}"
+    self << "mov %current_slot, #{nscify(id1)}"
   end
 
   def ins_0xc7(slot, command)
@@ -1809,7 +1843,7 @@ while true do
         val2, _ = file.read_variable_length(1)
         out.load_background_0x1(slot, val1, val2)
       when 0x3 # used once in kal
-        val2, val3 = file.read_variable_length(1)
+        val2, val3 = file.read_variable_length(2)
         out.load_background_0x3(slot, val1, val2, val3)
       else
         raise "Invalid 0xc1 0x2 mode: 0x#{mode.to_s(16)}"
