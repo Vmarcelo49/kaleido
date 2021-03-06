@@ -447,24 +447,78 @@ class OutFile
   # --------------------------------------- #
 
   def dialogue(num, var1, length, str)
-    # TODO: formatting tags (@b = bold?)
-    character, *lines = str.gsub(/@[b<>]/, '').split("@r")
-    line = lines.join("\n")
-    debug "line #{num}, var1 #{var1}, spoken by #{character}"
+    debug "DIALOGUE: line #{num}, var1 #{var1}"
+    debug "raw: #{str}"
+    components = str.split(/(?=@.)/)
 
-    elements = line.split('.')
-    line_text = ""
-    elements.each do |e|
-      if e.start_with? '@v'
-        debug "play voice: #{e[2..-1]}"
+    character_name = nil
+    result_str = ""
+    furi1, furi2 = nil, nil
+
+    components.each do |e|
+      if e.start_with? '@'
+        tag, content = [e[0..1], e[2..-1]]
+        case tag
+        when "@k" # click wait
+          result_str += "@#{content}"
+        when "@r" # newline
+          result_str += "\n^#{content}"
+        when "@v" # play voice
+          voice_name, text = content.split(".")
+          result_str += "/\n; play voice: #{voice_name}\n^#{text}"
+        when "@b" # begin furigana
+          furi1 = content[0..-2] # remove trailing period
+        when "@<" # begin what the furigana refers to
+          furi2 = content
+        when "@>" # end furigana
+          # TODO: find a way to actually display furigana (or other ruby text)
+          # in Ponscripter. It does not have the ruby text support of other
+          # NScripter-type engines, so it is not possible natively. An old
+          # (supposedly outdated) manual file reads:
+          #
+          #   Both [ruby and tategaki] can be simulated in small
+          #   quantities if required by judicious use of h_textextent and font
+          #   size/position tags.
+          #
+          # Using h_textextent to measure the text for correct centering of the
+          # ruby text makes sense, but I cannot figure out how to use the result
+          # within position tags, or even how to interpolate variables into
+          # text formatting tags in general.
+          # For now, use parentheses instead.
+          result_str += "#{furi2}(#{furi1})#{content}"
+        when "@[" # begin comment?
+          result_str += "[#{content}"
+        when "@]" # end comment?
+          result_str += "]#{content}"
+        when "@|" # defines pipe to be waited for. NYI
+          result_str += "#{content}"
+        when "@y" # after the pipe wait is finished. NYI
+          result_str += "#{content}"
+        when "@w" # waiting for a specified amount of time?
+          result_str += "/\n; wait #{content}\n^"
+        when "@o" # NYI
+        when "@a" # NYI
+        when "@z" # NYI
+        when "@s" # NYI
+        when "@{" # NYI
+        when "@}" # NYI
+        when "@e" # NYI
+        when "@c" # NYI
+        when "@t" # NYI
+        when "@-" # NYI
+        else
+          raise "Unrecognised dialogue tag: #{tag}"
+        end
       else
-        line_text += e
+        character_name = e
       end
     end
 
-    self << "^#{character} ~y+10~" # character tag (temporary)
-    self << "^#{line_text}\\" # actual line
-    @dialogue_lines << line_text
+    result_str.strip!
+
+    self << "^#{character_name} ~y+10~" unless character_name.nil?
+    self << "#{result_str}@" # actual line
+    @dialogue_lines << result_str
     self << "textclear"
     newline
   end
@@ -1271,7 +1325,7 @@ class OutFile
     debug "instruction 0xe0 (Kal specific), data: #{data}"
   end
 
-  def ins_0xe0_saku(data)
+  def ins_0xe0_saku(data) # related to updating the character screen
     nyi
     debug "instruction 0xe0 (Saku specific), data: #{data}"
   end
@@ -1291,7 +1345,7 @@ class OutFile
     debug "instruction 0xe3 (Saku specific), data: #{data}"
   end
 
-  def ins_0xe4_saku(data)
+  def ins_0xe4_saku(data) # related to updating the character screen
     nyi
     debug "instruction 0xe4 (Saku specific), data: #{data}"
   end
