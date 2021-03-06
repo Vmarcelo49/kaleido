@@ -16,6 +16,7 @@ Applies to both Kal and Saku in theory, although I usually only test with Kal.
 
  - [x] Successfully parses the entire file
  - [x] Dialogue
+   - [ ] Text positioning
  - [x] Backgrounds
    - [ ] Positioning
    - [ ] Animations
@@ -25,7 +26,9 @@ Applies to both Kal and Saku in theory, although I usually only test with Kal.
    - [ ] Animations
    - [ ] `%DRESS%`
  - [ ] BGM
- - [ ] SE
+   - [ ] Fadein/-out
+ - [x] SE
+   - [ ] Fadein/-out
  - [ ] Masks
  - [ ] Voices
  - [ ] Choices

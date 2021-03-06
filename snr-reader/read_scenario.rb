@@ -416,6 +416,8 @@ class OutFile
 
   def raw_bgm_track(id); "bgm_0x#{id}_#{normalize(@bgm_tracks[id].name1)}_#{normalize(@bgm_tracks[id].name2)}"; end
 
+  def raw_sound_effect(id); "se_0x#{id.to_s(16)}_#{normalize(@sound_effects[id].name)}"; end
+
   def null; "null"; end
 
   def nyi
@@ -672,6 +674,13 @@ class OutFile
       when 0x0b
         nyi
         stack.simple_unary('[0x0b]')
+      when 0x10 # probably: 0 if to_check < to_compare, 1 if to_check >= to_compare
+        stack.intermediate do
+          to_compare = stack.pop
+          to_check = stack.pop
+          stack << "if #{to_check} < #{to_compare}: mov %i2, 0"
+          stack << "if #{to_check} >= #{to_compare}: mov %i2, 1"
+        end
       when 0x18 # ternary operator? to_check ? true_val : false_val
         stack.intermediate do
           to_check = stack.pop
@@ -1130,7 +1139,7 @@ class OutFile
     # val4 probably volume
     #debug "instruction 0x90, bgm_id: #{bgm_id}, fadein_frames: #{fadein_frames}, val3: #{val3}, val4: #{val4}"
     self << "#{LookupTable.for("bgm")} #{nscify(bgm_id)}"
-    self << "mp3fadein #{nscify(fadein_frames)}"
+    #self << "mp3fadein #{nscify(fadein_frames)}"
     self << %(bgm c_bgm_folder + "\\" + $i2 + ".opus")
     self << "^Playing BGM '^$i3^'"
   end
@@ -1150,14 +1159,19 @@ class OutFile
     debug "instruction 0x94, val1: #{hex(val1)}"
   end
 
-  def ins_0x95(channel, sfxid, val1, val2, val3, val4, val5)
-    nyi
-    debug "instruction 0x95 (sfx related?), channel: #{hex(channel)}, sfxid: #{hex(sfxid)}, val1: #{val1}, val2: #{val2}, val3: #{val3}, val4: #{val4}, val5: #{val5}"
+  def play_se(channel, se_id, fadein_frames, loop_flag, volume, val4, val5)
+    # loop_flag: 0 = looping, 1 = play once
+    debug "Play sound effect, channel: #{channel}, se_id: #{se_id}, fadein_frames: #{fadein_frames}, loop_flag: #{loop_flag}, volume: #{volume}, val4: #{val4}, val5: #{val5}"
+    # TODO: fadein
+    self << "chvol #{nscify(channel)}, #{nscify(volume)}"
+    self << "#{LookupTable.for("se")} #{nscify(se_id)}"
+    self << %(if #{nscify(loop_flag)} > 0: dwave #{nscify(channel)}, c_se_folder + "\\" + $i2 + ".wav")
+    self << %(if #{nscify(loop_flag)} <= 0: dwaveloop #{nscify(channel)}, c_se_folder + "\\" + $i2 + ".wav")
   end
 
-  def ins_0x96(channel, val1)
-    nyi
-    debug "instruction 0x96 (sfx fade?), channel: #{hex(channel)}, val1: #{val1}"
+  def fadeout_se(channel, duration)
+    debug "Sound effect fadeout, channel: #{channel}, duration: #{duration}"
+    self << "dwavestop #{nscify(channel)}"
   end
 
   def ins_0x97(channel)
@@ -1448,15 +1462,19 @@ lut.write_to(out)
 puts "Read #{out.bgm_tracks.length} BGM tracks"
 
 # Read SFX
+lut = LookupTable.new("se")
 SoundEffect = Struct.new(:name, :offset)
 file.read_table(se_offset) do |n|
   out.offset = file.pos
   len, _ = file.unpack_read(MODE == :konosuba ? 'C' : 'S<')
   name = file.read_shift_jis(len)
   out.sound_effects[n] = SoundEffect.new(name, file.pos)
+  lut.append(n, [["$i2", out.raw_sound_effect(n)]])
   out << "; Sound effect 0x#{n.to_s(16)} at 0x#{file.pos.to_s(16)}: #{name}"
+  out << %(stralias #{out.raw_sound_effect(n)}, "#{name}")
 end
 out.newline
+lut.write_to(out)
 puts "Read #{out.sound_effects.length} sound effects"
 
 # Read movies
@@ -1800,11 +1818,11 @@ while true do
   when 0x95 # sfx related?
     # all of these are hypothetical...
     channel, sfxid, val1, val2, val3, val4, val5 = file.read_variable_length(7)
-    out.ins_0x95(channel, sfxid, val1, val2, val3, val4, val5)
+    out.play_se(channel, sfxid, val1, val2, val3, val4, val5)
   when 0x96 # also sfx related? some kind of fade?
     channel, _ = file.read_variable_length(1)
     var1, _ = file.read_variable_length(1)
-    out.ins_0x96(channel, var1)
+    out.fadeout_se(channel, var1)
   when 0x97 # ?? BGM related?
     argument, _ = file.read_variable_length(1)
     out.ins_0x97(argument)

@@ -96,8 +96,11 @@ ADDRESSES = {
   'addr_0x6e87' => 'f_set_sprite_properties_0x6e87',
 
   # Likely plays a sound effect, possibly on loop.
-  # %px3 = probably some sort of duration?
-  # %px4 = volume?
+  # %px0 = channel/mode (3 = looping, 0 = not looping)
+  # %px1 = ID
+  # %px2 = volume?
+  # %px3 = fadein duration
+  # %px4 = (if 0, instruction 0x9a will not be run)
   'addr_0x6eca' => 'f_se_play',
 
   # %px0 = channel
