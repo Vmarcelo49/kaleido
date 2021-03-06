@@ -18,6 +18,8 @@ if sha256 == '1a41c95be7427ddd3397249fde5be56dfd6f4a8cef20ab27a7a648f31e824dfb'
   load './assoc/kaleido.rb'
 elsif sha256 == '1537bb6f964e2b3ce5501fc68d86f13b7b483d385f34ea6630a7e4d33758aa82'
   load './assoc/saku.rb'
+elsif sha256 == 'f3be6c855e97d0442c9ec610d38e219d3696cf7e5da9c0f1b430d9df6d3f7130'
+  load './assoc/konosuba.rb'
 else
   ADDRESSES = {}
   REGISTERS = {}
@@ -196,6 +198,11 @@ class IO
 
   # Read an asset table
   def read_table(offset, length_prefix = true)
+    if offset == 0
+      Kernel.puts "Warning: Offset for table is 0! Skipping" # somehow Konosuba does not have a BGM table???
+      return
+    end
+
     seek(offset)
     if length_prefix
       table_length, element_count = unpack_read('L<L<')
@@ -746,6 +753,10 @@ class OutFile
     conditional_jump(val1, val2, addr, "!=")
   end
 
+  def conditional_jump_greater_or_equal(val1, val2, addr)
+    conditional_jump(val1, val2, addr, ">=")
+  end
+
   def conditional_jump_greater_than(val1, val2, addr)
     conditional_jump(val1, val2, addr, ">")
   end
@@ -815,14 +826,18 @@ class OutFile
     debug "instruction 0x52 (some kind of return?)"
   end
 
+  def ins_0x53(reg, val1, val2)
+  debug "instruction 0x53: register: #{hex(reg)}, val1: #{val1}, val2: #{val2}"
+  end
+
   def end
     nyi
     debug "end"
   end
 
-  def syscall(target)
+  def ins_0x80(reg, val1)
     nyi
-    debug "syscall #{hex(target)}"
+    debug "instruction 0x80: register: #{hex(reg)}, val1: #{val1}"
   end
 
   def ins_0x81(register, val1)
@@ -1064,6 +1079,11 @@ class OutFile
   def ins_0xc4(target, data)
     nyi
     debug "instruction 0xc0, target: #{target}, data: #{data}"
+  end
+
+  def ins_0xc5(id1)
+    nyi
+    debug "instruction 0xc5 (set current slot?), id: #{id1}"
   end
 
   # WILD GUESS: this sets the value of the 0x7a (-6) sprite slot? unclear
@@ -1331,7 +1351,7 @@ out << %(stralias c_se_folder, "#{SE_FOLDER}")
 Mask = Struct.new(:name, :offset)
 file.read_table(mask_offset) do |n|
   out.offset = file.pos
-  len, _ = file.unpack_read('S<')
+  len, _ = file.unpack_read(MODE == :konosuba ? 'C' : 'S<') # Konosuba appears to only use one byte for many string lengths
   name = file.read_shift_jis(len)
   out.masks[n] = Mask.new(name, file.pos)
   out << "; Mask 0x#{n.to_s(16)} at 0x#{file.pos.to_s(16)}: #{name}"
@@ -1343,7 +1363,7 @@ lut = LookupTable.new("background")
 Background = Struct.new(:name, :offset, :val1)
 file.read_table(bg_offset) do |n|
   out.offset = file.pos
-  len, _ = file.unpack_read('S<')
+  len, _ = file.unpack_read(MODE == :konosuba ? 'C' : 'S<')
   name = file.read_shift_jis(len)
   name.gsub!("%TIME%", "a") if MODE == :kal # TODO: find out what's up with these %TIME% bgs
   val1, _ = file.unpack_read('S<')
@@ -1371,7 +1391,7 @@ end
 
 file.read_table(bustup_offset) do |n|
   out.offset = file.pos
-  len, _ = file.unpack_read('S<')
+  len, _ = file.unpack_read(MODE == :konosuba ? 'C' : 'S<')
   if MODE == :kal
     name = file.read_shift_jis(len)
     name.gsub!("%DRESS%", "首輪")
@@ -1385,7 +1405,7 @@ file.read_table(bustup_offset) do |n|
     out << "; Bustup 0x#{n.to_s(16)} at 0x#{file.pos.to_s(16)}: #{name} (val1 = 0x#{val1.to_s(16)}, val2 = 0x#{val2.to_s(16)}, val3 = 0x#{val3.to_s(16)}, val4 = 0x#{val4.to_s(16)})"
   else
     name = file.read_shift_jis(len)
-    len, _ = file.unpack_read('S<')
+    len, _ = file.unpack_read(MODE == :konosuba ? 'C' : 'S<')
     expr = file.read_shift_jis(len)
     val1, _ = file.unpack_read('S<')
     out.bustups[n] = Bustup.new(name, expr, file.pos, val1)
@@ -1431,7 +1451,7 @@ puts "Read #{out.bgm_tracks.length} BGM tracks"
 SoundEffect = Struct.new(:name, :offset)
 file.read_table(se_offset) do |n|
   out.offset = file.pos
-  len, _ = file.unpack_read('S<')
+  len, _ = file.unpack_read(MODE == :konosuba ? 'C' : 'S<')
   name = file.read_shift_jis(len)
   out.sound_effects[n] = SoundEffect.new(name, file.pos)
   out << "; Sound effect 0x#{n.to_s(16)} at 0x#{file.pos.to_s(16)}: #{name}"
@@ -1443,11 +1463,11 @@ puts "Read #{out.sound_effects.length} sound effects"
 Movie = Struct.new(:name, :offset, :val1, :val2, :val3)
 file.read_table(movie_offset) do |n|
   out.offset = file.pos
-  len, _ = file.unpack_read('S<')
+  len, _ = file.unpack_read(MODE == :konosuba ? 'C' : 'S<')
   name = file.read_shift_jis(len)
-  val1, val2, val3 = file.unpack_read('S<S<S<')
+  val1, val2, val3 = file.unpack_read(MODE == :konosuba ? 'S<S<' : 'S<S<S<')
   out.movies[n] = Movie.new(name, file.pos, val1, val2, val3)
-  out << "; Movie 0x#{n.to_s(16)} at 0x#{file.pos.to_s(16)}: #{name} (val1 = 0x#{val1.to_s(16)}, val2 = 0x#{val2.to_s(16)}, val3 = 0x#{val3.to_s(16)})"
+  out << "; Movie 0x#{n.to_s(16)} at 0x#{file.pos.to_s(16)}: #{name} (val1 = 0x#{val1.to_s(16)}, val2 = 0x#{val2.to_s(16)}, val3 = 0x#{val3&.to_s(16)})"
 end
 out.newline
 puts "Read #{out.movies.length} movies"
@@ -1456,7 +1476,7 @@ puts "Read #{out.movies.length} movies"
 Voice = Struct.new(:name, :offset, :values)
 file.read_table(voice_offset) do |n|
   out.offset = file.pos
-  len, _ = file.unpack_read('S<')
+  len, _ = file.unpack_read(MODE == :konosuba ? 'C' : 'S<')
   name = file.read_shift_jis(len)
   if MODE == :kal
     # Kal always has two values here.
@@ -1623,6 +1643,10 @@ while true do
     when 0x02
       val1, val2 = file.read_variable_length(2)
       address, _ = file.unpack_read('L<')
+      out.conditional_jump_greater_or_equal(val1, val2, address)
+    when 0x03
+      val1, val2 = file.read_variable_length(2)
+      address, _ = file.unpack_read('L<')
       out.conditional_jump_greater_than(val1, val2, address)
     when 0x04
       val1, val2 = file.read_variable_length(2)
@@ -1688,9 +1712,14 @@ while true do
     out.ins_0x51(reg, val3, val4, data)
   when 0x52 # ?? maybe some kind of return?
     out.ins_0x52
-  when 0x80 # syscall?
-    target, _ = file.unpack_read('C')
-    out.syscall(target)
+  when 0x53 # only used in konosuba
+    reg, _ = file.unpack_read('S<')
+    val1, val2 = file.read_variable_length(2)
+    out.ins_0x53(reg, val1, val2)
+  when 0x80
+    reg, _ = file.unpack_read('S<')
+    val1, _ = file.read_variable_length(1)
+    out.ins_0x80(reg, val1)
   when 0x81 # only used in saku, maybe "read external" (chiru)?
     register, _ = file.unpack_read('S<')
     val1, _ = file.read_variable_length(1)
@@ -1860,6 +1889,9 @@ while true do
         out.load_sprite(slot, val1, mode, val3, val4, val5, val6)
       elsif mode == 0x0 # Used in saku
         out.load_sprite(slot, val1, mode, nil, nil, nil, nil)
+      elsif mode == 0x3 # Used in konosuba
+        val3, val4 = file.read_variable_length(2)
+        out.load_sprite(slot, val1, mode, val3, val4, nil, nil)
       else
         raise "Invalid 0xc1 0x3 mode: 0x#{mode.to_s(16)}"
       end
@@ -1948,6 +1980,9 @@ while true do
     length, _ = file.unpack_read('C')
     data = file.read_variable_length(length)
     out.ins_0xc4(target, data)
+  when 0xc5 # konosuba only, probably does something similar as c6 in kal
+    id, _ = file.read_variable_length(1)
+    out.ins_0xc5(id)
   when 0xc6 # load sprite?
     #id1, id2 = file.unpack_read('CC')
     id1, id2 = file.read_variable_length(2)
