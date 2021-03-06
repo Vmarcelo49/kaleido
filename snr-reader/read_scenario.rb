@@ -941,12 +941,21 @@ class OutFile
 
   def load_sprite(slot, val1, mode, sprite_index, val4, face_id, val6)
     debug "resource command (0xc1) 0x3 (load bustup sprite), slot #{slot}, values: #{val1} #{mode} #{sprite_index} val4: #{val4}, face_id: #{face_id}, val6: #{val6}"
-    return if mode != 0x0f
 
-    self << "#{LookupTable.for("bustup")} #{nscify(sprite_index)}"
-
-    self << "itoa_pad $i3, #{nscify(face_id)}, 3"
-    load_sprite_cached(nscify_slot(slot), 'c_sprite_folder + "\" + $i2 + "_" + $i3 + ".png"')
+    case mode
+    when 0x00 # sometimes used in saku
+      self << "^load sprite slot=^#{nscify(slot)}^ val1=^#{nscify(val1)}^ mode=^#{mode}}"
+    when 0x01 # saku default
+      self << "^load sprite slot=^#{nscify(slot)}^ val1=^#{nscify(val1)}^ mode=^#{mode}^ sprite_index=^#{nscify(sprite_index)}}"
+      self << "#{LookupTable.for("bustup")} #{nscify(sprite_index)}"
+      load_sprite_cached(nscify_slot(slot), 'c_sprite_folder + "\" + $i2 + "_" + $i3 + "_1.png"')
+    when 0x0f # kal default
+      self << "#{LookupTable.for("bustup")} #{nscify(sprite_index)}"
+      self << "itoa_pad $i3, #{nscify(face_id)}, 3"
+      load_sprite_cached(nscify_slot(slot), 'c_sprite_folder + "\" + $i2 + "_" + $i3 + ".png"')
+    else
+      self << "^load sprite slot=^#{nscify(slot)}^ val1=^#{nscify(val1)}^ mode=^#{mode}^ sprite_index=^#{nscify(sprite_index)}}"
+    end
   end
 
   def resource_command_0x4(slot, val1, val2)
@@ -984,9 +993,8 @@ class OutFile
     debug "resource command (0xc1) 0x9 (special?), slot #{slot}, values: #{val1} #{val2} #{val3}"
   end
 
-  def sprite_command_0x00(slot)
-    nyi
-    debug "sprite command (0xc2) 0x00 (z order?)"
+  def sprite_command_hide(slot)
+    self << "vsp2 #{nscify_slot(slot)}, 0"
   end
 
   def sprite_command_0x01(slot)
@@ -1005,10 +1013,20 @@ class OutFile
     debug "sprite wait (0xc3) 0x00, values: #{slot} #{val2}"
   end
 
-  def sprite_wait_0x01(slot, val2, val3)
-    nyi
-    #@h[@offset] << "^spritewait 0x01 slot=^#{nscify(slot)}^,val2=^#{nscify(val2)}^,val3=^#{nscify(val3)}"
-    debug "sprite wait (0xc3) 0x01 (alpha?), values: #{slot} #{val2} #{val3}"
+  def sprite_set_basic_transform(slot, target, value) # used frequently in saku
+    #@h[@offset] << "^spritewait 0x01 slot=^#{nscify(slot)}^,target=^#{nscify(target)}^,value=^#{nscify(value)}"
+    debug "sprite wait (0xc3) 0x01 (alpha?), values: #{slot} #{target} #{value}"
+
+    case target.value!
+    when 0x00 # X position?
+      self << "mov %i2, #{nscify(value)} + 0"
+      sprite_cache_set(nscify_slot(slot), "x_position", "%i2")
+    when 0x05 # Y position?
+      self << "mov %i2, #{nscify(value)} + 0"
+      sprite_cache_set(nscify_slot(slot), "y_position", "%i2")
+    else
+      nyi
+    end
   end
 
   def sprite_wait_0x02(slot, val2, val3)
@@ -1047,7 +1065,7 @@ class OutFile
     debug "sprite wait (0xc3) 0x07, values: #{slot} #{val2} #{val3} #{val4} #{val5}"
   end
 
-  def sprite_set_transform(slot, target, value, duration, val5, val6)
+  def sprite_set_complex_transform(slot, target, value, duration, val5, val6) # used often in kal
     debug "sprite wait (0xc3) 0x0f, values: #{slot} #{target} #{value} #{duration} #{val5} #{val6}"
     #self << "^spritewait 0x0f slot=^#{nscify(slot)}^,target=^#{nscify(target)}^,value=^#{nscify(value)}^,duration=^#{nscify(duration)}^,val5=^#{nscify(val5)}^,val6=^#{nscify(val6)}"
     case slot.value!
@@ -1426,7 +1444,7 @@ file.read_table(bustup_offset) do |n|
 
     lut_entry = []
     lut_entry << ["$i2", out.raw_bustup(n)]
-    lut_entry << ["$i3", expr]
+    lut_entry << ["$i3", %("#{expr}")]
     # potentially add more data here? like offsets etc.
     lut.append(n, lut_entry)
     out << "; Bustup 0x#{n.to_s(16)} at 0x#{file.pos.to_s(16)}: #{name} #{expr} (val1 = 0x#{val1.to_s(16)})"
@@ -1950,7 +1968,7 @@ while true do
     command, _ = file.unpack_read('C')
     case command
     when 0x00
-      out.sprite_command_0x00(slot)
+      out.sprite_command_hide(slot)
     when 0x01
       out.sprite_command_0x01(slot)
     when 0x12
@@ -1967,7 +1985,7 @@ while true do
       out.sprite_wait_0x00(val1, val2)
     when 0x01
       val3, _ = file.read_variable_length(1)
-      out.sprite_wait_0x01(val1, val2, val3)
+      out.sprite_set_basic_transform(val1, val2, val3)
     when 0x02
       val3, _ = file.read_variable_length(1)
       out.sprite_wait_0x02(val1, val2, val3)
@@ -1988,7 +2006,7 @@ while true do
       out.sprite_wait_0x07(val1, val2, val3, val4, val5)
     when 0x0f # anim?
       val3, val4, val5, val6 = file.read_variable_length(4)
-      out.sprite_set_transform(val1, val2, val3, val4, val5, val6)
+      out.sprite_set_complex_transform(val1, val2, val3, val4, val5, val6)
     else
       puts "Unknown sprite wait property"
       break
