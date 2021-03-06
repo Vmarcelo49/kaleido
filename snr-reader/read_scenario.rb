@@ -1134,13 +1134,13 @@ class OutFile
 
   # Sound related
 
-  def play_bgm(bgm_id, fadein_frames, val3, val4)
-    # val3 some sort of flag (0 or 1)
-    # val4 probably volume
-    #debug "instruction 0x90, bgm_id: #{bgm_id}, fadein_frames: #{fadein_frames}, val3: #{val3}, val4: #{val4}"
-    self << "#{LookupTable.for("bgm")} #{nscify(bgm_id)}"
+  def play_bgm(bgm_id, fadein_frames, loop_flag, volume)
+    # loop_flag is conjectured; it is always 0 in Kal
+    debug "Play BGM, bgm_id: #{bgm_id}, fadein_frames: #{fadein_frames}, loop_flag: #{loop_flag}, volume: #{volume}"
+    self << %(bgmvol #{nscify(volume)})
     #self << "mp3fadein #{nscify(fadein_frames)}"
-    self << %(bgm c_bgm_folder + "\\" + $i2 + ".opus")
+    self << "#{LookupTable.for("bgm")} #{nscify(bgm_id)}"
+    self << %(bgm c_bgm_folder + "\\" + $i2 + ".wav")
     self << "^Playing BGM '^$i3^'"
   end
 

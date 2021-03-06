@@ -25,8 +25,9 @@ Applies to both Kal and Saku in theory, although I usually only test with Kal.
    - [ ] Positioning
    - [ ] Animations
    - [ ] `%DRESS%`
- - [ ] BGM
+ - [x] BGM
    - [ ] Fadein/-out
+   - [ ] "Now playing" text
  - [x] SE
    - [ ] Fadein/-out
  - [ ] Masks

@@ -17,7 +17,9 @@ ADDRESSES = {
   'addr_0x4e52' => 'f_perform_transition_no_default',
 
   # %px0 = BGM ID
-  # %px2 = fadein duration in ms?
+  # %px1 = volume
+  # %px2 = fadein
+  # %px3 = (always 1)
   'addr_0x4e97' => 'f_bgm_play',
 
   # This seems to show a background under conditions.
