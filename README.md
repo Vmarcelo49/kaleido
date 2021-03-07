@@ -28,13 +28,13 @@ Applies to both Kal and Saku in theory, although I usually only test with Kal.
    - [ ] `%DRESS%`
  - [x] BGM
    - [ ] Fadein/-out
-   - [ ] "Now playing" text
+   - [x] "Now playing" text
  - [x] SE
    - [ ] Fadein/-out
  - [ ] Masks
  - [x] Voices
  - [ ] Choices
- - [ ] Movies
+ - [x] Movies
  - [ ] Menu
  - [ ] Loading, saving
  - [ ] Bonus content

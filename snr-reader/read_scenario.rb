@@ -54,6 +54,7 @@ SPRITE_FOLDER = 'sprites'
 
 BGM_FOLDER = 'bgm'
 SE_FOLDER = 'se'
+MOVIE_FOLDER = 'movie'
 
 # If true, certain internal instructions (NCSELECT) are ignored while parsing, as they
 # are when playing the game normally. If false, it can be considered as
@@ -391,8 +392,8 @@ class OutFile
   # the mappings by SPRITE_SLOT_MAIN) it will return the current_slot variable
   # instead.
   def nscify_slot(val)
-    return "127 - %current_slot" if val.constant? && val.value == SPRITE_SLOT_MAIN
-    "127 - #{nscify(val)}"
+    return "256 - %current_slot" if val.constant? && val.value == SPRITE_SLOT_MAIN
+    "256 - #{nscify(val)}"
   end
 
   # Remove or change characters that would not be allowed in nsc identifiers
@@ -418,6 +419,8 @@ class OutFile
 
   def raw_sound_effect(id); "se_0x#{id.to_s(16)}_#{normalize(@sound_effects[id].name)}"; end
 
+  def raw_movie(id); "movie_0x#{id.to_s(16)}_#{normalize(@movies[id].name)}"; end
+
   def null; "null"; end
 
   def nyi
@@ -440,6 +443,16 @@ class OutFile
   def sprite_cache_set(slot, what, value)
     self << %(mov ?sprite_#{what}s[#{slot}], #{value})
     self << %(amsp2 #{slot}, #{read_sprite_cache_for_sp2(slot)})
+  end
+
+  # Used for e.g. chapter titles, "now playing".
+  # x_/y_origin: shows where in the image x and y should refer to.
+  # 0,0 = center, -1/-1 = top left, -1/1 = bottom left, etc
+  def show_text_sprite(proc_tag, x, y, x_origin = 0, y_origin = 0, slot = 2)
+    self << %(lsph #{slot}, #{proc_tag}, #{x}, #{y})
+    self << "getspsize #{slot}, %i1, %i2"
+    self << %(lsp2 #{slot}, #{proc_tag}, (#{x}) + (#{-x_origin}) * (%i1 / 2), (#{y}) + (#{-y_origin}) * (%i2 / 2), 100, 100, 0, 255)
+    self << "print 2"
   end
 
   # --------------------------------------- #
@@ -558,14 +571,14 @@ class OutFile
     end
   end
 
-  def ins_0x8e(val1, val2, val3, data)
-    nyi
-    debug "instruction 0x8e (related to 0xc9), val1: #{val1}, val2: #{val2}, val3: #{val3}, data: #{data}"
+  def perform_transition_1(val1, val2, val3, length_byte, data)
+    debug "perform transition (type 1, 0x8e), val1: #{val1}, val2: #{val2}, val3: #{val3}, length_byte: 0b#{length_byte.to_s(2)}, data: #{data}"
+    self << "print 2"
   end
 
-  def ins_0xc9(val1, val2, val3, data)
+  def perform_transition_2(val1, val2, val3, length_byte, data)
     nyi
-    debug "instruction 0xc9 (related to 0x8e), val1: #{val1}, val2: #{val2}, val3: #{val3}, data: #{data}"
+    debug "perform transition (kal-type/type 2, 0xc9), val1: #{val1}, val2: #{val2}, val3: #{val3}, length_byte: 0b#{length_byte.to_s(2)}, data: #{data}"
   end
 
   def ins_0x8f
@@ -967,7 +980,7 @@ class OutFile
     # The values, what do they mean?
 
     debug "resource command (0xc1) 0x0 (remove slot?), slot #{slot}, values: #{val1} #{val2}"
-    self << "vsp2 #{nscify_slot(slot)}, 0"
+    self << "csp2 #{nscify_slot(slot)}"
   end
 
   def resource_command_0x1(slot, val1, val2, val3, val4, val5, width, height)
@@ -1000,7 +1013,6 @@ class OutFile
     when 0x00 # sometimes used in saku
       self << "^load sprite slot=^#{nscify(slot)}^ val1=^#{nscify(val1)}^ mode=^#{mode}}"
     when 0x01 # saku default
-      self << "^load sprite slot=^#{nscify(slot)}^ val1=^#{nscify(val1)}^ mode=^#{mode}^ sprite_index=^#{nscify(sprite_index)}}"
       self << "#{LookupTable.for("bustup")} #{nscify(sprite_index)}"
       load_sprite_cached(nscify_slot(slot), 'c_sprite_folder + "\" + $i2 + "_" + $i3 + "_1.png"')
     when 0x0f # kal default
@@ -1027,9 +1039,11 @@ class OutFile
     debug "resource command (0xc1) 0x6 0x2, slot #{slot}, values: #{val1}, data: #{data}"
   end
 
-  def resource_command_0x6_0x3(slot, val1, val3, data)
-    nyi
-    debug "resource command (0xc1) 0x6 0x3, slot #{slot}, values: #{val1} #{val3}, data: #{data}"
+  def play_movie(slot, val1, movie_id, data)
+    # data is often 1000, maybe a fadein?
+    debug "Play movie, slot: #{slot}, val1: #{val1}, movie: #{movie_id}, data: #{data}"
+    self << "#{LookupTable.for("movie")} #{nscify(movie_id)}"
+    self << %(movie c_movie_folder + "/" + $i2 + ".mpg", click)
   end
 
   def resource_command_0x6_0x5(slot, val1, val3, data)
@@ -1048,7 +1062,7 @@ class OutFile
   end
 
   def sprite_command_hide(slot)
-    self << "vsp2 #{nscify_slot(slot)}, 0"
+    self << "csp2 #{nscify_slot(slot)}"
   end
 
   def sprite_command_0x01(slot)
@@ -1069,15 +1083,19 @@ class OutFile
 
   def sprite_set_basic_transform(slot, target, value) # used frequently in saku
     #@h[@offset] << "^spritewait 0x01 slot=^#{nscify(slot)}^,target=^#{nscify(target)}^,value=^#{nscify(value)}"
-    debug "sprite wait (0xc3) 0x01 (alpha?), values: #{slot} #{target} #{value}"
+    debug "sprite set basic transform, slot: #{slot}, target: #{target}, value: #{value}"
 
     case target.value!
     when 0x00 # X position?
       self << "mov %i2, #{nscify(value)} + 0"
       sprite_cache_set(nscify_slot(slot), "x_position", "%i2")
-    when 0x05 # Y position?
+    when 0x01 # Y position?
       self << "mov %i2, #{nscify(value)} + 0"
       sprite_cache_set(nscify_slot(slot), "y_position", "%i2")
+    when 0x05 # most likely Z position, which is not really supported as is in ponscripter.
+      nyi
+      #self << "mov %i2, #{nscify(value)} + 0"
+      #sprite_cache_set(nscify_slot(slot), "y_position", "%i2")
     else
       nyi
     end
@@ -1119,8 +1137,8 @@ class OutFile
     debug "sprite wait (0xc3) 0x07, values: #{slot} #{val2} #{val3} #{val4} #{val5}"
   end
 
-  def sprite_set_complex_transform(slot, target, value, duration, val5, val6) # used often in kal
-    debug "sprite wait (0xc3) 0x0f, values: #{slot} #{target} #{value} #{duration} #{val5} #{val6}"
+  def sprite_set_complex_transform(slot, target, value, duration, val5, val6) # used often in kal, probably for its animation-like effects
+    debug "sprite set complex transform, slot: #{slot}, target: #{target}, value: #{value}, duration: #{duration}, val5: #{val5}, val6: #{val6}"
     #self << "^spritewait 0x0f slot=^#{nscify(slot)}^,target=^#{nscify(target)}^,value=^#{nscify(value)}^,duration=^#{nscify(duration)}^,val5=^#{nscify(val5)}^,val6=^#{nscify(val6)}"
     case slot.value!
     when SPRITE_SLOT_MAIN
@@ -1210,10 +1228,10 @@ class OutFile
     # loop_flag is conjectured; it is always 0 in Kal
     debug "Play BGM, bgm_id: #{bgm_id}, fadein_frames: #{fadein_frames}, loop_flag: #{loop_flag}, volume: #{volume}"
     self << %(bgmvol #{nscify(volume)})
-    #self << "mp3fadein #{nscify(fadein_frames)}"
     self << "#{LookupTable.for("bgm")} #{nscify(bgm_id)}"
-    self << %(bgm c_bgm_folder + "\\" + $i2 + ".wav")
-    self << "^Playing BGM '^$i3^'"
+    self << %(bgm c_bgm_folder + "/" + $i2 + ".wav")
+
+    show_text_sprite(%(":s/30,30,0,0;#bfffff🎵" + $i3), 5, 5, -1, -1)
   end
 
   def ins_0x91(val1)
@@ -1235,15 +1253,15 @@ class OutFile
     # loop_flag: 0 = looping, 1 = play once
     debug "Play sound effect, channel: #{channel}, se_id: #{se_id}, fadein_frames: #{fadein_frames}, loop_flag: #{loop_flag}, volume: #{volume}, val4: #{val4}, val5: #{val5}"
     # TODO: fadein
-    self << "chvol #{nscify(channel)}, #{nscify(volume)}"
+    self << "chvol 1 + #{nscify(channel)}, #{nscify(volume)}"
     self << "#{LookupTable.for("se")} #{nscify(se_id)}"
-    self << %(if #{nscify(loop_flag)} > 0: dwave #{nscify(channel)}, c_se_folder + "\\" + $i2 + ".wav")
-    self << %(if #{nscify(loop_flag)} <= 0: dwaveloop #{nscify(channel)}, c_se_folder + "\\" + $i2 + ".wav")
+    self << %(if #{nscify(loop_flag)} > 0: dwave 1 + #{nscify(channel)}, c_se_folder + "/" + $i2 + ".wav")
+    self << %(if #{nscify(loop_flag)} <= 0: dwaveloop 1 + #{nscify(channel)}, c_se_folder + "/" + $i2 + ".wav")
   end
 
   def fadeout_se(channel, duration)
     debug "Sound effect fadeout, channel: #{channel}, duration: #{duration}"
-    self << "dwavestop #{nscify(channel)}"
+    self << "dwavestop 1 + #{nscify(channel)}"
   end
 
   def ins_0x97(channel)
@@ -1433,6 +1451,7 @@ out << %(stralias c_bg_folder, "#{BG_FOLDER}")
 out << %(stralias c_sprite_folder, "#{SPRITE_FOLDER}")
 out << %(stralias c_bgm_folder, "#{BGM_FOLDER}")
 out << %(stralias c_se_folder, "#{SE_FOLDER}")
+out << %(stralias c_movie_folder, "#{MOVIE_FOLDER}")
 
 # Read masks
 Mask = Struct.new(:name, :offset)
@@ -1551,6 +1570,7 @@ lut.write_to(out)
 puts "Read #{out.sound_effects.length} sound effects"
 
 # Read movies
+lut = LookupTable.new("movie")
 Movie = Struct.new(:name, :offset, :val1, :val2, :val3)
 file.read_table(movie_offset) do |n|
   out.offset = file.pos
@@ -1558,9 +1578,12 @@ file.read_table(movie_offset) do |n|
   name = file.read_shift_jis(len)
   val1, val2, val3 = file.unpack_read(MODE == :konosuba ? 'S<S<' : 'S<S<S<')
   out.movies[n] = Movie.new(name, file.pos, val1, val2, val3)
+  lut.append(n, [["$i2", out.raw_movie(n)]])
   out << "; Movie 0x#{n.to_s(16)} at 0x#{file.pos.to_s(16)}: #{name} (val1 = 0x#{val1.to_s(16)}, val2 = 0x#{val2.to_s(16)}, val3 = 0x#{val3&.to_s(16)})"
+  out << %(stralias #{out.raw_movie(n)}, "#{name}")
 end
 out.newline
+lut.write_to(out)
 puts "Read #{out.movies.length} movies"
 
 # Read voices
@@ -1862,18 +1885,18 @@ while true do
     len, _ = file.unpack_read('S<')
     data = file.read_shift_jis(len)
     out.ins_0x8d(val1, val2, register, val3, code, data)
-  when 0x8e # MAYBE something related to printing?
+  when 0x8e
     val1, val2, val3 = file.read_variable_length(3)
     length_byte, _ = file.unpack_read('C')
 
     # Count the number of 1 bits in length_byte. Having this be the length
     # explains all instances of 0x8e I've encountered so far, but I have
     # absolutely no idea why it would be this way.
-    length = 0
-    while length_byte > 0; length_byte &= length_byte - 1; length += 1; end
+    length, lb = 0, length_byte
+    while lb > 0; lb &= lb - 1; length += 1; end
 
     data = file.read_variable_length(length)
-    out.ins_0x8e(val1, val2, val3, data)
+    out.perform_transition_1(val1, val2, val3, length_byte, data)
   when 0x8f # ??
     out.ins_0x8f
   when 0x90 # ??
@@ -2000,7 +2023,7 @@ while true do
         out.resource_command_0x6_0x2(slot, val1, data)
       when 0x03
         val3, val4 = file.read_variable_length(2)
-        out.resource_command_0x6_0x3(slot, val1, val3, val4)
+        out.play_movie(slot, val1, val3, val4)
       when 0x05
         val3, val4 = file.read_variable_length(2)
         out.resource_command_0x6_0x5(slot, val1, val3, val4)
@@ -2086,14 +2109,11 @@ while true do
     val1, val2, val3 = file.read_variable_length(3)
     length_byte, _ = file.unpack_read('C')
 
-    # Count the number of 1 bits in length_byte. Having this be the length
-    # explains all instances of 0x8e/0xc9 I've encountered so far, but I have
-    # absolutely no idea why it would be this way.
-    length = 0
-    while length_byte > 0; length_byte &= length_byte - 1; length += 1; end
+    length, lb = 0, length_byte
+    while lb > 0; lb &= lb - 1; length += 1; end
 
     data = file.read_variable_length(length)
-    out.ins_0xc9(val1, val2, val3, data)
+    out.perform_transition_2(val1, val2, val3, length_byte, data)
   when 0xca # acts upon some register or something?
     register, _ = file.unpack_read('C')
     out.ins_0xca(register)

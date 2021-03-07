@@ -12,7 +12,6 @@ versionstr "NScripter test suite"," version 1.0"
 savename "Save","Load","File "
 savenumber 20
 effectblank 0
-transmode alpha
 selectcolor #ffffff,#cccccc
 menuselectcolor #ffffff,#aaaaaa,#999999
 defaultspeed 0,0,0
@@ -50,7 +49,7 @@ numalias param_stack, 3
 dim ?param_stack[256]
 
 ; Storing sprite properties
-numalias num_sprites, 128
+numalias num_sprites, 256
 
 numalias sprite_x_positions, 5
 numalias sprite_y_positions, 6
@@ -78,4 +77,4 @@ defsub new_sprite_slot
 defsub ff_bupload
 defsub ff_bupclear
 
-effect 8, 15, 500, ".\masks\top.png" ; TODO: find out exact timings
+effect 2, 10, 50
