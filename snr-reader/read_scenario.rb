@@ -393,7 +393,16 @@ class OutFile
   # instead.
   def nscify_slot(val)
     return "255 - %current_slot" if val.constant? && val.value == SPRITE_SLOT_MAIN
-    "255 - #{nscify(val)}"
+
+    # TODO: It seems that even apart from SPRITE_SLOT_MAIN, Saku (maybe also
+    # Kal) uses negative sprite slots, causing a naive (255 - val) calculation
+    # to overflow above 256, which is the maximum number of extended sprites.
+    # Using the absolute value here is kind of a hack which probably does not
+    # have the exact intended effect, but at least it doesn't crash.
+    # A cleaner solution could be to map some of the "center" sprite slots
+    # which are likely unused for the most part onto each other, to free up
+    # space at the top of the range.
+    "255 - #{val.constant? ? val.value!.abs : nscify(val)}"
   end
 
   # Remove or change characters that would not be allowed in nsc identifiers
@@ -499,9 +508,11 @@ class OutFile
           # text formatting tags in general.
           # For now, use parentheses instead.
           result_str += "#{furi2}(#{furi1})#{content}"
-        when "@[" # begin comment?
+        when "@["
+          # This probably denotes a formatting region. It remains to be seen
+          # whether parsing this is actually relevant for any format tag
           result_str += "[#{content}"
-        when "@]" # end comment?
+        when "@]" # End region
           result_str += "]#{content}"
         when "@|" # defines pipe to be waited for. NYI
           result_str += "#{content}"
@@ -518,7 +529,20 @@ class OutFile
         when "@{" # NYI
         when "@}" # NYI
         when "@e" # NYI
-        when "@c" # NYI
+        when "@c" # Coloured text
+          colour, text = content.split(".")
+
+          if colour.nil? || colour.empty?
+            result_str += "#ffffff" # Reset colour
+          else
+            puts "colour: #{colour}"
+            # The colour is represented as three digits like "279", where each
+            # digit represents one channel from 0-9. So 999 would be #ffffff
+            red, green, blue = colour.chars.map(&:to_i).map { |e| e * 255 / 9 }
+            colour_num = (red << 16) | (green << 8) | (blue)
+            hex_colour = '#' + colour_num.to_s(16).rjust(6, '0')
+            result_str += hex_colour
+          end
         when "@t" # NYI
         when "@-" # NYI
         else
@@ -977,7 +1001,7 @@ class OutFile
       self << "mov #{register(1)}, #{options.length - 1}"
     else
       first_sprite, x, y = 10, 50, 50
-      self << %(lsp #{first_sprite - 1}, ":s/30,30,0,0;#ffffffNCSELECT", #{x}, #{y})
+      # self << %(lsp #{first_sprite - 1}, ":s/30,30,0,0;#ffffffNCSELECT", #{x}, #{y})
       options.each_with_index do |option, i|
         self << %(lsp #{first_sprite + i}, ":s/30,30,0,0;#aaffff#ffffaa#{option}", #{x}, #{y + 30 * i})
         self << %(spbtn #{first_sprite + i}, #{i + 1})

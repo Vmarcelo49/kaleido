@@ -41,8 +41,7 @@ WINDOWS = {
     # textx texty txwdh txhgt fs  spx spy spd bold shad colour_or_image          winx winy winwdh winhgt
     ' 208,  342,  1520, 600,  40, 0,  2,  0,  1,   1,   #555555,                 0,   0,   1919,  1079',
     ' 208,  342,  1520, 600,  40, 0,  2,  0,  1,   1,   #555555,                 0,   0,   1919,  1079',
-    390, # TODO
-    709
+    1920, 1080 # off screen
   ]],
 }
 
