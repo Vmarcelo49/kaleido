@@ -1303,18 +1303,31 @@ class OutFile
   # Sections, timers
 
   def section_title(type, str)
-    nyi
     debug "section title: '#{str}', type: #{hex(type)}"
+    case type
+    when 0x0
+      # Appears to be something internal which is not actually shown to the user.
+      nyi
+    when 0x1
+      # Shown to the user
+      show_text_sprite(%(":s/60,60,0,0;#ffffff#{str}"), 5, SCREEN_HEIGHT - 5, -1, 1, 3)
+      self << "mov %timer, 1000"
+      self << "resettimer"
+      @on_timer_finish = "csp2 3"
+    end
   end
 
-  def ins_0xa1
-    nyi
-    debug "instruction 0xa1 (set timer?)"
+  def timer_wait
+    self << "waittimer %timer"
+    unless @on_timer_finish.nil?
+      self << @on_timer_finish
+      @on_timer_finish = nil
+    end
   end
 
   def ins_0xa2(argument)
     nyi
-    debug "instruction 0xa1 (clear timer & disable skip?), argument: #{hex(argument)}"
+    debug "instruction 0xa2 (clear timer & disable skip?), argument: #{hex(argument)}"
   end
 
   def ins_0xa3
@@ -1947,7 +1960,7 @@ while true do
     str = file.read_shift_jis(length)
     out.section_title(type, str)
   when 0xa1 # set timer?
-    out.ins_0xa1
+    out.timer_wait
   when 0xa2 # clear timer and disable skip??
     argument, _ = file.read_variable_length(1)
     out.ins_0xa2(argument)

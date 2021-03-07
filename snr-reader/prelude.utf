@@ -35,6 +35,7 @@ numalias ibup_cat, 14
 numalias ibup_expr, 15
 
 numalias current_slot, 16
+numalias timer, 17
 
 ; The stack that registers can be pushed to and popped from by SNR instructions.
 numalias stack, 0
