@@ -60,7 +60,7 @@ MOVIE_FOLDER = 'movie'
 # are when playing the game normally. If false, it can be considered as
 # "test mode"
 # Probably only applies to Kal
-SNR_PROD = true
+SNR_PROD = false
 
 SCREEN_WIDTH = 1920
 SCREEN_HEIGHT = 1080
@@ -240,7 +240,7 @@ class OutFile
     @dialogue_lines = []
 
     # Counts which NScripter variable is to be used next to provide an alias for registers or function parameters.
-    @nsc_variable_counter = 20 # reserve first 20 variables for internal use
+    @nsc_variable_counter = 50 # reserve first 50 variables for internal use
 
     @masks = {}
     @backgrounds = {}
@@ -392,8 +392,8 @@ class OutFile
   # the mappings by SPRITE_SLOT_MAIN) it will return the current_slot variable
   # instead.
   def nscify_slot(val)
-    return "256 - %current_slot" if val.constant? && val.value == SPRITE_SLOT_MAIN
-    "256 - #{nscify(val)}"
+    return "255 - %current_slot" if val.constant? && val.value == SPRITE_SLOT_MAIN
+    "255 - #{nscify(val)}"
   end
 
   # Remove or change characters that would not be allowed in nsc identifiers
@@ -511,7 +511,9 @@ class OutFile
           result_str += "/\n; wait #{content}\n^"
         when "@o" # NYI
         when "@a" # NYI
-        when "@z" # NYI
+        when "@z" # Font size in percent
+          percent_size, text = content.split(".")
+          result_str += "~%#{percent_size}~#{text}"
         when "@s" # NYI
         when "@{" # NYI
         when "@}" # NYI
@@ -528,11 +530,18 @@ class OutFile
     end
 
     result_str.strip!
+    result_str.gsub!('�', '　')
 
-    self << "^#{character_name} ~y+10~" unless character_name.nil?
+    if character_name.nil?
+      self << "set_nochar"
+    else
+      self << "set_char"
+      # TODO: find out how to display this above the text window
+      self << %(lsp2 slot_char_name, ":s/40,40,0,0;#ffffff#{character_name}", %char_name_x, %char_name_y, 100, 100, 0)
+    end
     self << "#{result_str}@" # actual line
     @dialogue_lines << result_str
-    self << "textclear"
+    self << "csp2 slot_char_name:textclear:wavestop"
     newline
   end
 
@@ -612,19 +621,17 @@ class OutFile
     self << "mov #{register(reg)}, #{register(reg)} / #{nscify(value)} ; #{value}"
   end
 
-  def register_or(reg, value)
-    nyi
-    debug "mov #{register(reg)}, #{register(reg)} | #{value}"
-  end
-
   def register_and(reg, value)
     nyi
     debug "mov #{register(reg)}, #{register(reg)} & #{value}"
   end
 
-  def register_0x08(reg, value) # something special to kaleido. (Couldn't find this in saku) implementing as + for the time being...
-    nyi
-    self << "mov #{register(reg)}, #{register(reg)} [0x08] #{nscify(value)} ; #{value}"
+  def register_0x08(reg, value)
+    # something special to kaleido. (Couldn't find this in saku)
+    # The second argument appears to always be a power of 2, or 0.
+    # I have a hunch that it might actually be logical or, so I'm implementing
+    # this as + for now.
+    self << "mov #{register(reg)}, #{register(reg)} + #{nscify(value)} ; #{value}"
   end
 
   def register_add2(reg, value1, value2)
@@ -932,11 +939,10 @@ class OutFile
   end
 
   # Most likely sets the current textbox mode. (ADV/NVL, or special positions maybe?)
-  def ins_0x85(mode)
-    # 0 = ADV (default)
-    # 1 = NVL-ish
-    debug "instruction 0x85 (set text positioning mode), mode: #{mode}"
-    #self << "^ins 0x85, val: ^#{nscify(val1)}"
+  def set_text_positioning_mode(mode)
+    # The 0x20 (32) bit seems to have some particular significance here.
+    self << "lookup_window #{nscify(mode)} ; #{mode}"
+    self << "set_nochar"
   end
 
   # Stack related?
@@ -970,7 +976,15 @@ class OutFile
     if SNR_PROD
       self << "mov #{register(1)}, #{options.length - 1}"
     else
-      raise "Test mode NCSELECT is currently not implemented!"
+      first_sprite, x, y = 10, 50, 50
+      self << %(lsp #{first_sprite - 1}, ":s/30,30,0,0;#ffffffNCSELECT", #{x}, #{y})
+      options.each_with_index do |option, i|
+        self << %(lsp #{first_sprite + i}, ":s/30,30,0,0;#aaffff#ffffaa#{option}", #{x}, #{y + 30 * i})
+        self << %(spbtn #{first_sprite + i}, #{i + 1})
+      end
+      self << "btnwait %i1"
+      self << options.map.with_index { |_, i| "csp #{first_sprite + i}" }.join(':')
+      self << "mov #{register(1)}, %i1 - 1"
     end
   end
 
@@ -1096,6 +1110,14 @@ class OutFile
       nyi
       #self << "mov %i2, #{nscify(value)} + 0"
       #sprite_cache_set(nscify_slot(slot), "y_position", "%i2")
+    when 0x0c # X scaling, 1000 = normal
+      self << "mov %i2, #{nscify(value)} / 1"
+      sprite_cache_set(nscify_slot(slot), "x_scale", "%i2")
+    when 0x0d # Y scaling, 1000 = normal
+      self << "mov %i2, #{nscify(value)} / 1"
+      sprite_cache_set(nscify_slot(slot), "y_scale", "%i2")
+    when 0x1a # most likely turns a sprite to monochrome. I don't think ponscripter supports this
+      self << "; monochrome sprite"
     else
       nyi
     end
@@ -1144,20 +1166,15 @@ class OutFile
     when SPRITE_SLOT_MAIN
       case target.value!
       when 0x00 # X position
-        #self << "getspsize #{nscify_slot(slot)}, %i1, %i2"
-        #self << "mov %i2, #{nscify(duration)} + %i2 / 2" # It seems that the sprite X position is based on the center of the sprite, while the Y position uses the top.
-        #self << "mov ?sprite_x_positions[#{nscify_slot(slot)}], #{nscify(value)}"
-        #self << "mov ?sprite_y_positions[#{nscify_slot(slot)}], %i2"
-        #self << "amsp2 #{nscify_slot(slot)}, #{nscify(value)} + 960, %i2, 100, 100, 0, 255"
         self << "mov %i2, #{nscify(value)} + 0"
         sprite_cache_set(nscify_slot(slot), "x_position", "%i2")
       when 0x01 # Y position
         self << "mov %i2, #{nscify(value)} + 0"
         sprite_cache_set(nscify_slot(slot), "y_position", "%i2")
-      when 0x0c # X (?) scaling
+      when 0x0c # X scaling, 1000 = normal
         self << "mov %i2, #{nscify(value)} / 1"
         sprite_cache_set(nscify_slot(slot), "x_scale", "%i2")
-      when 0x0d # Y (?) scaling
+      when 0x0d # Y scaling, 1000 = normal
         self << "mov %i2, #{nscify(value)} / 1"
         sprite_cache_set(nscify_slot(slot), "y_scale", "%i2")
       else
@@ -1231,7 +1248,7 @@ class OutFile
     self << "#{LookupTable.for("bgm")} #{nscify(bgm_id)}"
     self << %(bgm c_bgm_folder + "/" + $i2 + ".wav")
 
-    show_text_sprite(%(":s/30,30,0,0;#bfffff🎵" + $i3), 5, 5, -1, -1)
+    show_text_sprite(%(":s/30,30,0,0;#bfffff🎵" + $i3), 5, 5, -1, -1, "slot_bgm_name")
   end
 
   def ins_0x91(val1)
@@ -1310,7 +1327,7 @@ class OutFile
       nyi
     when 0x1
       # Shown to the user
-      show_text_sprite(%(":s/60,60,0,0;#ffffff#{str}"), 5, SCREEN_HEIGHT - 5, -1, 1, 3)
+      show_text_sprite(%(":s/60,60,0,0;#ffffff#{str}"), 5, SCREEN_HEIGHT - 5, -1, 1, "slot_section_title")
       self << "mov %timer, 1000"
       self << "resettimer"
       @on_timer_finish = "csp2 3"
@@ -1645,6 +1662,33 @@ puts "Read #{out.table9.length} table 9 entries"
 
 out.newline
 
+# Text window definitions
+WINDOWS.each do |_, v|
+  name, value = v
+  value_char, value_nochar = value
+  out << %(h_defwindow "window_#{name}_char", #{value_char})
+  out << %(h_defwindow "window_#{name}_nochar", #{value_nochar})
+end
+out.newline
+
+# Text window lookup
+orig = out.offset
+out.offset = script_offset
+
+out << "*lookup_window"
+out << "getparam %i5"
+WINDOWS.each do |k, v|
+  name, value = v
+  _, _, char_name_x, char_name_y = value
+  out << %(if %i5 == #{k}:mov $window, "window_#{name}":mov %char_name_x, #{char_name_x}:mov %char_name_y, #{char_name_y}:goto *lookup_window_ret)
+end
+out << "^Set text positioning style ^%i5^, not yet implemented^"
+out << 'mov $window, "internal_default"'
+out << "*lookup_window_ret"
+out << "return"
+out.newline
+out.offset = orig
+
 # Parse script header
 file.seek(script_offset)
 out.offset = script_offset
@@ -1688,8 +1732,6 @@ while true do
       out.register_mul(register, data1)
     when 0x05
       out.register_div(register, data1)
-    when 0x06
-      out.register_or(register, data1)
     when 0x07
       out.register_and(register, data1)
     when 0x08 # ?
@@ -1860,7 +1902,7 @@ while true do
     out.wait_frames(mode, val)
   when 0x85 # ??
     val1, _ = file.read_variable_length(1)
-    out.ins_0x85(val1)
+    out.set_text_positioning_mode(val1)
   when 0x86 # dialogue
     if MODE == :saku
       # Saku somehow stores the dialogue number in a three-byte integer??

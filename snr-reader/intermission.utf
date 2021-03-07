@@ -6,8 +6,12 @@ h_mapfont 0, "default.ttf"
 
 !s0
 textspeed 0
-;setwindow 300,800,32,3,36,20,0,2,20,1,1,#999999,0,0,1919,1079
-setwindow 100,100,60,3,18,20,0,2,20,1,1,#999999,0,0,1919,1079 ; for debug
+h_usewindow "internal_default"
+
+; temporary saku hack, these lines should have no effect in kal
+mov $window, "window_0x02"
+mov %char_name_x, 390
+mov %char_name_y, 709
 
 mov %sp, 0 ; initialize stack pointer
 mov %psp, 0
@@ -17,6 +21,15 @@ fill_array sprite_y_scales, num_sprites, 1000
 
 ;goto *snr_script_start
 goto *l_scenario_start ; jump to where the script actually starts
+
+*set_char
+h_usewindow $window + "_char"
+return
+
+*set_nochar
+h_usewindow $window + "_nochar"
+csp2 slot_char_name
+return
 
 *fill_array ; Fill an array with one value
 getparam %i5, %i6, %i7 ; Array ID, length, value

@@ -28,6 +28,23 @@ FF_CALLS = {}
 
 SPRITE_SLOT_MAIN = -6 # ?
 
+# Text positioning windows
+WINDOWS = {
+  0x02 => ['0x02', [
+    # textx texty txwdh txhgt fs  spx spy spd bold shad colour_or_image             winx winy
+    ' 210,  772,  1510, 278,  50, 0,  0,  0,  1,   1,   "custom/msgbox_char.png",   146, 671',
+    ' 210,  772,  1510, 278,  50, 0,  0,  0,  1,   1,   "custom/msgbox_nochar.png", 146, 671',
+    390, # horizontal center of character name
+    709  # vertical center of character name
+  ]],
+  0x04 => ['0x04', [
+    # textx texty txwdh txhgt fs  spx spy spd bold shad colour_or_image          winx winy winwdh winhgt
+    ' 208,  342,  1520, 600,  40, 0,  2,  0,  1,   1,   #555555,                 0,   0,   1919,  1079',
+    ' 208,  342,  1520, 600,  40, 0,  2,  0,  1,   1,   #555555,                 0,   0,   1919,  1079',
+    390, # TODO
+    709
+  ]],
+}
 
 # Which labels should be added in addition to the dynamically generated ones
-REQUIRE_LABELS = Set.new([0xb66db, 0x94e83])
+REQUIRE_LABELS = Set.new([0xb66db, 0x94e83, 0x8780ac])

@@ -16,7 +16,7 @@ Applies to both Kal and Saku in theory, although I usually only test with Kal.
 
  - [x] Successfully parses the entire file
  - [x] Dialogue
-   - [ ] Text positioning
+   - [x] Text positioning
    - [ ] Pipe waits
  - [x] Backgrounds
    - [ ] Positioning

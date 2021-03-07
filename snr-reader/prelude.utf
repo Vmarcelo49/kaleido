@@ -36,6 +36,10 @@ numalias ibup_expr, 15
 
 numalias current_slot, 16
 numalias timer, 17
+numalias window, 18
+
+numalias char_name_x, 19
+numalias char_name_y, 20
 
 ; The stack that registers can be pushed to and popped from by SNR instructions.
 numalias stack, 0
@@ -70,12 +74,24 @@ dim ?sprite_opacities[num_sprites]
 
 numalias null, -1
 
+; Predefined sprite slots
+numalias slot_char_name, 2
+numalias slot_section_title, 3
+numalias slot_bgm_name, 4
+
 defsub fill_array
 defsub restore_params
 defsub itoa_pad
 defsub new_sprite_slot
+defsub lookup_window
+defsub set_char
+defsub set_nochar
 
 defsub ff_bupload
 defsub ff_bupclear
+
+h_defwindow "internal_default_char",   100,100,1720,880,20,0,2,0,1,1,#999999,0,0,1919,1079 ; for debug
+h_defwindow "internal_default_nochar", 100,100,1720,880,20,0,2,0,1,1,#999999,0,0,1919,1079
+h_defwindow "internal_default",        100,100,1720,880,20,0,2,0,1,1,#999999,0,0,1919,1079
 
 effect 2, 10, 50

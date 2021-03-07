@@ -217,6 +217,37 @@ FF_CALLS = {
 
 SPRITE_SLOT_MAIN = -6
 
+# Text positioning windows
+WINDOWS = {
+  0x00 => ['0x00', [
+    # textx texty txwdh txhgt fs  spx spy spd bold shad colour_or_image          winx winy
+    ' 368,  860,  1206, 300,  41, 0,  2,  0,  1,   1,   "sys/msgtex_msgwnd.png", 0,   760',
+    ' 368,  860,  1206, 300,  41, 0,  2,  0,  1,   1,   "sys/msgtex_msgwnd.png", 0,   760',
+    531, # horizontal center of character name
+    805  # vertical center of character name
+  ]],
+  0x01 => ['0x01', [
+    # textx texty txwdh txhgt fs  spx spy spd bold shad colour_or_image          winx winy
+    ' 368,  860,  1206, 300,  41, 0,  2,  0,  1,   1,   "sys/msgtex_msgwnd.png", 0,   760',
+    ' 368,  860,  1206, 300,  41, 0,  2,  0,  1,   1,   "sys/msgtex_msgwnd.png", 0,   760',
+    531, # horizontal center of character name
+    805  # vertical center of character name
+  ]],
+  0x20 => ['0x20', [
+    # textx texty txwdh txhgt fs  spx spy spd bold shad colour   winx winy winwdh winhgt
+    ' 418,  370,  1060, 600,  41, 0,  2,  0,  1,   1,   #555555, 0,   0,   1919,  1079',
+    ' 418,  370,  1060, 600,  41, 0,  2,  0,  1,   1,   #555555, 0,   0,   1919,  1079',
+    390, # TODO
+    709
+  ]],
+  0x21 => ['0x21', [
+    # textx texty txwdh txhgt fs  spx spy spd bold shad colour   winx winy winwdh winhgt
+    ' 418,  370,  1060, 600,  41, 0,  2,  0,  1,   1,   #555555, 0,   0,   1919,  1079',
+    ' 418,  370,  1060, 600,  41, 0,  2,  0,  1,   1,   #555555, 0,   0,   1919,  1079',
+    390, # TODO
+    709
+  ]],
+}
 
 # Which labels should be added in addition to the dynamically generated ones
 REQUIRE_LABELS = Set.new([0x8c19])
