@@ -1267,8 +1267,9 @@ class OutFile
   end
 
   def play_voice(name, volume, val2)
-    nyi
-    self << "play voice, name: '#{name}', volume: #{volume}, val2: #{val2}"
+    debug "play voice, name: '#{name}', volume: #{volume}, val2: #{val2}"
+    self << "voicevol #{volume}"
+    self << %(wave "voice/#{name}.wav")
   end
 
   def ins_0x9e(val1)

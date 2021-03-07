@@ -23,4 +23,4 @@ SPRITE_SLOT_MAIN = -6 # ?
 
 
 # Which labels should be added in addition to the dynamically generated ones
-REQUIRE_LABELS = Set.new
+REQUIRE_LABELS = Set.new([0xb66db])
