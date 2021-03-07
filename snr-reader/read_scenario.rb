@@ -465,7 +465,7 @@ class OutFile
           result_str += "\n^#{content}"
         when "@v" # play voice
           voice_name, text = content.split(".")
-          result_str += "/\n; play voice: #{voice_name}\n^#{text}"
+          result_str += %(/\nwave "voice/#{voice_name}.wav"\n^#{text})
         when "@b" # begin furigana
           furi1 = content[0..-2] # remove trailing period
         when "@<" # begin what the furigana refers to

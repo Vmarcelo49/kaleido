@@ -32,7 +32,7 @@ Applies to both Kal and Saku in theory, although I usually only test with Kal.
  - [x] SE
    - [ ] Fadein/-out
  - [ ] Masks
- - [ ] Voices
+ - [x] Voices
  - [ ] Choices
  - [ ] Movies
  - [ ] Menu
