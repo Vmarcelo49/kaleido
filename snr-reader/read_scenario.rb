@@ -2394,7 +2394,11 @@ puts "Writing..."
 
 if output_path
   out.write(output_path)
-  raw.write(output_path + "_raw.rb")
+
+  # Saku specific variants of certain commands are not yet supported for the
+  # raw output. You can remove this check if you know what you are doing and
+  # are not expecting a fully bidirectional transformation.
+  raw.write(output_path + "_raw.rb") if MODE == :kal
 end
 
 File.write(dialogue_path, out.dialogue_lines.join("\n")) if dialogue_path
