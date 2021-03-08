@@ -10,6 +10,7 @@ path = ARGV[0] # Input .snr file.
 output_path = ARGV[1] # Output file. (Optional)
 max_dialogue = ARGV[2] ? ARGV[2].to_i : 100000000 # Maximum amount of dialogue that will be parsed, useful if you are trying to quickly prototype some dialogue-independent functionality
 dialogue_path = ARGV[3] # Optional; if present, a file containing only the raw dialogue lines will be written to this location.
+$stuff = []
 
 # Calculate the SHA256 value of the given script, to find out which mode to use.
 sha256 = Digest::SHA256.hexdigest(File.read(path))
@@ -21,9 +22,11 @@ elsif sha256 == '1537bb6f964e2b3ce5501fc68d86f13b7b483d385f34ea6630a7e4d33758aa8
 elsif sha256 == 'f3be6c855e97d0442c9ec610d38e219d3696cf7e5da9c0f1b430d9df6d3f7130'
   load './assoc/konosuba.rb'
 else
+  MODE = :kal
   ADDRESSES = {}
   REGISTERS = {}
   FF_CALLS = {}
+  WINDOWS = {}
   REQUIRE_LABELS = Set.new
   puts "Script not recognised! You are probably trying to load a different SNR file than Kal or Saku. This may or may not work."
 end
@@ -32,10 +35,19 @@ file = open(path, 'rb')
 
 # Byte lengths represented by Ruby pack/unpack instructions; these are the only supported ones in unpack_read
 LENS = {
-  'c' => 1,
-  's' => 2,
-  'l' => 4,
-  'q' => 8
+  's' => [2, true],
+  'l' => [4, true],
+  'q' => [8, true],
+  'C' => [1, true],
+  'S' => [2, false],
+  'L' => [4, false],
+  'Q' => [8, false]
+}
+
+BITS = {
+  1 => 'byte',
+  2 => 'short',
+  4 => 'int'
 }
 
 # Converter to be used for converting from SJIS to UTF-8
@@ -102,18 +114,22 @@ class Varlen
       # Access a small register (%rx0 to %rxf)
       @mode = :mb
       @value = @first_byte & 0xf
+      $stuff << "Register.new(#{@value})"
     elsif @first_byte == 0xc0
       # Access a register larger than %rxf (i.e. %rx10 and onwards)
       @mode = :mc0
       @value = data.bytes[1]
+      $stuff << "Register.new(#{@value})"
     elsif @first_byte >= 0xd0 && @first_byte <= 0xdf
       # Access a function parameter
       @mode = :md
       @value = @first_byte & 0xf
+      $stuff << "Parameter.new(#{@value})"
     elsif @first_byte == 0xe0
       # Null value
       @mode = :me
       @value = 0
+      $stuff << ":null"
     elsif (@first_byte >= 0xa0 && @first_byte <= 0xaf) || (@first_byte >= 0xe1 && @first_byte <= 0xff) # these are, as far as I know, unused
       raise "Invalid varlen first byte: 0x#{@first_byte.to_s(16)}"
     elsif @first_byte >= 0x40 && @first_byte <= 0x7f
@@ -125,6 +141,8 @@ class Varlen
       @mode = :mraw
       @value = @first_byte
     end
+
+    $stuff << "#{@value}" if constant?
   end
 
   # Does it represent a constant, non-null value?
@@ -157,22 +175,34 @@ class IO
   # format specification.
   # Only supports C/c, S/s, L/l, Q/q at the moment (8, 16, 32, 64 bit, signed
   # or unsigned)
-  def unpack_read(str)
-    len = str.downcase.chars.map { |chr| LENS[chr] || 0 }.sum
-    exit if len > 1000
+  def unpack_read(str, ignore = false)
+    lens = str.chars.map { |chr| LENS[chr] || nil }.compact
+    len = lens.map(&:first).sum
+    raise "Too long: len = #{len}" if len > 1000
     data = read(len)
     byte_print(data.bytes)
     result = data.unpack(str)
     p result
+
+    unless ignore # Don't add this unpack_read to $stuff, e.g. if we're reading the length of something
+      result.each_with_index do |value, i|
+        bits, signed = lens[i]
+        $stuff << "#{signed ? '' : 'u'}#{BITS[bits]}(#{value})"
+      end
+    end
+
     result
   end
 
   # Read a SHIFT-JIS string of the given length. Must be null-terminated
   # (as all strings are in SNR format)
-  def read_shift_jis(len)
+  def read_shift_jis(len, halfwidth_replace = false)
     raw = read(len)
     raise 'Not null terminated!' unless raw.chars[-1] == 0.chr
-    CONVERTER.convert(raw[0..-2]).tr(HALFWIDTH, HALFWIDTH_REPLACE)
+    result = CONVERTER.convert(raw[0..-2])
+    result = result.tr(HALFWIDTH, HALFWIDTH_REPLACE) if halfwidth_replace
+    $stuff << "'#{result}'"
+    result
   end
 
   # Read `len` varlen arguments to an instruction (see Varlen class above)
@@ -194,6 +224,12 @@ class IO
     end
     # For debug purposes
     result.each { |v| Kernel.puts v.to_s.c(95) }
+    result
+  end
+
+  def readbyte2
+    result = readbyte
+    $stuff << "byte(#{result})"
     result
   end
 
@@ -958,6 +994,7 @@ class OutFile
   end
 
   def wait_frames(mode, num_frames)
+    debug "wait frames (0x83): mode #{mode}"
     self << "mov %i1, #{nscify(num_frames)} * 16 ; wait #{num_frames} frames" # TOOD: more accurate timing
     self << "wait %i1"
   end
@@ -1131,6 +1168,13 @@ class OutFile
       self << "mov %i2, #{nscify(value)} + 0"
       sprite_cache_set(nscify_slot(slot), "y_position", "%i2")
     when 0x05 # most likely Z position, which is not really supported as is in ponscripter.
+      # IDEA of how to support this and also get around certain other snr
+      # ideosyncrasies regarding sprite slots: have an automatically maintained
+      # mapping of SNR sprite slots -> NSC extended sprite slots, where sprites
+      # can be moved around to change their Z index. This would be quite a clean
+      # solution but has the disadvantage of requiring implementations of
+      # complex data structures entirely within NSC...
+
       nyi
       #self << "mov %i2, #{nscify(value)} + 0"
       #sprite_cache_set(nscify_slot(slot), "y_position", "%i2")
@@ -1277,7 +1321,7 @@ class OutFile
 
   def ins_0x91(val1)
     nyi
-    debug "instruction 0x91, val1: #{hex(val1)}"
+    debug "instruction 0x91, val1: #{val1}"
   end
 
   def ins_0x92(val1, val2)
@@ -1287,7 +1331,7 @@ class OutFile
 
   def ins_0x94(val1)
     nyi
-    debug "instruction 0x94, val1: #{hex(val1)}"
+    debug "instruction 0x94, val1: #{val1}"
   end
 
   def play_se(channel, se_id, fadein_frames, loop_flag, volume, val4, val5)
@@ -1307,7 +1351,7 @@ class OutFile
 
   def ins_0x97(channel)
     nyi
-    debug "instruction 0x97 (bgm related?), channel: #{hex(channel)}"
+    debug "instruction 0x97 (bgm related?), channel: #{channel}"
   end
 
   def ins_0x98(val1, val2, val3)
@@ -1424,6 +1468,56 @@ class OutFile
   end
 end
 
+# Instead of a Ponscripter script, this outfile format generates Ruby code that
+# can be used to reconstruct the original SNR file.
+class RawOutFile
+  def initialize
+    @h = {}
+    @offset = 0
+    @require_labels = Set.new
+  end
+
+  attr_reader :offset
+
+  def entry_point=(value)
+    @entry_point = value
+    @require_labels << value
+  end
+
+  def offset=(value)
+    @offset = value
+    @h[@offset] ||= []
+  end
+
+  def <<(line)
+    @h[@offset] << line
+  end
+
+  # Write the created data to the given path
+  def write(path)
+    file = open(path, 'w')
+
+    # assign labels to locations used in jumps
+    # combine lines to file, inserting labels
+    # write to file
+    @h.to_a.sort_by(&:first).each do |k, v|
+      if @require_labels.include? k
+        file.puts "#{@entry_point == k ? 'entry_point = ' : ''}s.label :#{raw_address(k)}"
+      end
+      v.each { |line| file.puts line }
+    end
+  end
+
+  def label(addr)
+    @require_labels << addr
+    ':' + raw_address(addr)
+  end
+
+  def raw_address(num)
+    "addr_0x#{num.to_s(16)}"
+  end
+end
+
 # Generates a number-to-string lookup table in NScripter code. Used to access assets by their IDs.
 # This is done by essentially using a really big tablegoto, with each target doing a mov and then return
 # TODO: there may be a much more elegant method to do this
@@ -1484,6 +1578,11 @@ filesize, dialogue_line_count, _, _, _, _, _ = file.unpack_read('L<L<L<L<L<L<L<'
 script_offset, mask_offset, bg_offset, bustup_offset, bgm_offset, se_offset, movie_offset, voice_offset, offset8, offset9 = file.unpack_read('L<L<L<L<L<L<L<L<L<L<')
 
 out = OutFile.new(0x0, script_offset)
+raw = RawOutFile.new
+$stuff = [] # Keeps track of what has been read from the file
+
+raw.offset = 0
+raw << "def raw_apply(snr)"
 
 out.offset = 0
 out.newline
@@ -1510,24 +1609,28 @@ out << %(stralias c_movie_folder, "#{MOVIE_FOLDER}")
 # Read masks
 Mask = Struct.new(:name, :offset)
 file.read_table(mask_offset) do |n|
-  out.offset = file.pos
+  out.offset, raw.offset = file.pos, file.pos
   len, _ = file.unpack_read(MODE == :konosuba ? 'C' : 'S<') # Konosuba appears to only use one byte for many string lengths
   name = file.read_shift_jis(len)
   out.masks[n] = Mask.new(name, file.pos)
+  raw << "snr.mask '#{name}'"
   out << "; Mask 0x#{n.to_s(16)} at 0x#{file.pos.to_s(16)}: #{name}"
 end
 out.newline
+raw << "snr.write_masks\n"
 
 # Read backgrounds
 lut = LookupTable.new("background")
 Background = Struct.new(:name, :offset, :val1)
 file.read_table(bg_offset) do |n|
-  out.offset = file.pos
+  out.offset, raw.offset = file.pos, file.pos
   len, _ = file.unpack_read(MODE == :konosuba ? 'C' : 'S<')
   name = file.read_shift_jis(len)
+  raw_name = name.clone
   name.gsub!("%TIME%", "a") if MODE == :kal # TODO: find out what's up with these %TIME% bgs
   val1, _ = file.unpack_read('S<')
   out.backgrounds[n] = Background.new(name, file.pos, val1)
+  raw << "snr.bg '#{raw_name}', #{val1}"
 
   lut.append(n, [["$i2", out.raw_background(n)]])
 
@@ -1535,6 +1638,7 @@ file.read_table(bg_offset) do |n|
   out << %(stralias #{out.raw_background(n)}, "#{File.join(BG_FOLDER, name + BG_EXT)}")
 end
 out.newline
+raw << "snr.write_bgs\n"
 lut.write_to(out)
 puts "Read #{out.backgrounds.length} backgrounds"
 
@@ -1550,13 +1654,15 @@ else
 end
 
 file.read_table(bustup_offset) do |n|
-  out.offset = file.pos
+  out.offset, raw.offset = file.pos, file.pos
   len, _ = file.unpack_read(MODE == :konosuba ? 'C' : 'S<')
   if MODE == :kal
     name = file.read_shift_jis(len)
+    raw_name = name.clone
     name.gsub!("%DRESS%", "首輪")
     val1, val2, val3, val4 = file.unpack_read('S<S<S<s<')
     out.bustups[n] = Bustup.new(name, file.pos, val1, val2, val3, val4)
+    raw << "snr.bustup '#{raw_name}', #{val1}, #{val2}, #{val3}, #{val4}"
 
     lut_entry = []
     lut_entry << ["$i2", out.raw_bustup(n)]
@@ -1580,6 +1686,7 @@ file.read_table(bustup_offset) do |n|
   out << %(stralias #{out.raw_bustup(n)}, "#{name}")
 end
 out.newline
+raw << "snr.write_bustups\n"
 lut.write_to(out)
 puts "Read #{out.bustups.length} bustups"
 
@@ -1587,13 +1694,14 @@ puts "Read #{out.bustups.length} bustups"
 lut = LookupTable.new("bgm")
 BGMTrack = Struct.new(:name1, :name2, :offset, :val1)
 file.read_table(bgm_offset) do |n|
-  out.offset = file.pos
+  out.offset, raw.offset = file.pos, file.pos
   len1, _ = file.unpack_read('S<')
   name1 = file.read_shift_jis(len1)
   len2, _ = file.unpack_read('S<')
   name2 = file.read_shift_jis(len2)
   val1, _ = file.unpack_read('S<')
   out.bgm_tracks[n] = BGMTrack.new(name1, name2, file.pos, val1)
+  raw << "snr.bgm '#{name1}', %(#{name2}), #{val1}"
 
   lut_entry = []
   lut_entry << ["$i2", out.raw_bgm_track(n)]
@@ -1604,6 +1712,7 @@ file.read_table(bgm_offset) do |n|
   out << %(stralias #{out.raw_bgm_track(n)}, "#{name1}" ; #{name2})
 end
 out.newline
+raw << "snr.write_bgms\n"
 lut.write_to(out)
 puts "Read #{out.bgm_tracks.length} BGM tracks"
 
@@ -1611,15 +1720,17 @@ puts "Read #{out.bgm_tracks.length} BGM tracks"
 lut = LookupTable.new("se")
 SoundEffect = Struct.new(:name, :offset)
 file.read_table(se_offset) do |n|
-  out.offset = file.pos
+  out.offset, raw.offset = file.pos, file.pos
   len, _ = file.unpack_read(MODE == :konosuba ? 'C' : 'S<')
   name = file.read_shift_jis(len)
   out.sound_effects[n] = SoundEffect.new(name, file.pos)
+  raw << "snr.se '#{name}'"
   lut.append(n, [["$i2", out.raw_sound_effect(n)]])
   out << "; Sound effect 0x#{n.to_s(16)} at 0x#{file.pos.to_s(16)}: #{name}"
   out << %(stralias #{out.raw_sound_effect(n)}, "#{name}")
 end
 out.newline
+raw << "snr.write_ses\n"
 lut.write_to(out)
 puts "Read #{out.sound_effects.length} sound effects"
 
@@ -1627,28 +1738,31 @@ puts "Read #{out.sound_effects.length} sound effects"
 lut = LookupTable.new("movie")
 Movie = Struct.new(:name, :offset, :val1, :val2, :val3)
 file.read_table(movie_offset) do |n|
-  out.offset = file.pos
+  out.offset, raw.offset = file.pos, file.pos
   len, _ = file.unpack_read(MODE == :konosuba ? 'C' : 'S<')
   name = file.read_shift_jis(len)
   val1, val2, val3 = file.unpack_read(MODE == :konosuba ? 'S<S<' : 'S<S<S<')
   out.movies[n] = Movie.new(name, file.pos, val1, val2, val3)
+  raw << "snr.movie '#{name}', #{val1}, #{val2}, #{val3}"
   lut.append(n, [["$i2", out.raw_movie(n)]])
   out << "; Movie 0x#{n.to_s(16)} at 0x#{file.pos.to_s(16)}: #{name} (val1 = 0x#{val1.to_s(16)}, val2 = 0x#{val2.to_s(16)}, val3 = 0x#{val3&.to_s(16)})"
   out << %(stralias #{out.raw_movie(n)}, "#{name}")
 end
 out.newline
+raw << "snr.write_movies\n"
 lut.write_to(out)
 puts "Read #{out.movies.length} movies"
 
 # Read voices
 Voice = Struct.new(:name, :offset, :values)
 file.read_table(voice_offset) do |n|
-  out.offset = file.pos
+  out.offset, raw.offset = file.pos, file.pos
   len, _ = file.unpack_read(MODE == :konosuba ? 'C' : 'S<')
   name = file.read_shift_jis(len)
   if MODE == :kal
     # Kal always has two values here.
     values = file.unpack_read('CC')
+    raw << "snr.voice '#{name}', #{values[0]}, #{values[1]}"
   else
     # Saku has a number of values prefixed with their length.
     len, _ = file.unpack_read('C')
@@ -1658,33 +1772,37 @@ file.read_table(voice_offset) do |n|
   out << "; Voice 0x#{n.to_s(16)} at 0x#{file.pos.to_s(16)}: #{name} (values = #{values.map { |e| e.to_s(16) }.join(' ') })"
 end
 out.newline
+raw << "snr.write_voices\n"
 puts "Read #{out.voices.length} voices"
 
 # Read ???
 Table8Entry = Struct.new(:name, :offset, :data)
 file.read_table(offset8, length_prefix = false) do |n|
-  out.offset = file.pos
+  out.offset, raw.offset = file.pos, file.pos
   len, _ = file.unpack_read('S<')
   name = file.read_shift_jis(len)
   len2, _ = file.unpack_read('S<')
   data = file.unpack_read('S<' * len2)
   out.table8[n] = Table8Entry.new(name, file.pos, data)
+  raw << "snr.table8_entry '#{name}', #{data.join(', ')}"
   out << "; table 8 entry 0x#{n.to_s(16)} at 0x#{file.pos.to_s(16)}: #{name} (data: #{data.map { |e| e.to_s(16) } })"
 end
 out.newline
+raw << "snr.write_table8\n"
 puts "Read #{out.table8.length} table 8 entries"
 
 # Read ?????
 Table9Entry = Struct.new(:offset, :val1, :val2, :val3)
 file.read_table(offset9, length_prefix = false) do |n|
-  out.offset = file.pos
+  out.offset, raw.offset = file.pos, file.pos
   val1, val2, val3 = file.unpack_read('S<S<S<')
   out.table9[n] = Table9Entry.new(file.pos, val1, val2, val3)
+  raw << "snr.table9_entry #{val1}, #{val2}, #{val3}"
   out << "; table 9 entry 0x#{n.to_s(16)} at 0x#{file.pos.to_s(16)}: val1 = 0x#{val1.to_s(16)}, val2 = 0x#{val2.to_s(16)}, val3 = 0x#{val3.to_s(16)}"
 end
-puts "Read #{out.table9.length} table 9 entries"
-
 out.newline
+raw << "snr.write_table9\n"
+puts "Read #{out.table9.length} table 9 entries"
 
 # Text window definitions
 WINDOWS.each do |_, v|
@@ -1716,16 +1834,20 @@ out.offset = orig
 # Parse script header
 file.seek(script_offset)
 out.offset = script_offset
-section_size, element_count = file.unpack_read('L<L<')
+script_magic, entry_point = file.unpack_read('L<L<')
 out << "; Starting script section"
-out << "; Script section size: #{section_size}"
-out << "; Element count: #{element_count}"
+out << "; Magic: 0x#{script_magic.to_s(16)}"
+out << "; Entry point: 0x#{entry_point.to_s(16)}"
 out << "*snr_script_start"
 out.newline
 
+raw << "s = KalScript.new(snr.current_offset + 8)\n"
+raw.entry_point = entry_point
+
 # The loop for parsing the script data
 while true do
-  out.offset = file.pos
+  out.offset, raw.offset = file.pos, file.pos
+  $stuff, raw_override = [], false
   begin
     instruction = file.readbyte
   rescue EOFError
@@ -1786,7 +1908,7 @@ while true do
     target, _ = file.unpack_read('S<')
     operations = []
     loop do
-      byte = file.readbyte
+      byte = file.readbyte2
       byte_print([byte], 96)
       case byte
       when 0xff
@@ -1812,7 +1934,7 @@ while true do
     data = []
     len.times do
       val, _ = file.read_variable_length(1)
-      file.read(4 - val.length)
+      (4 - val.length).times { file.readbyte2 }
       data << val
     end
     # data = file.unpack_read('L<' * len)
@@ -1827,57 +1949,69 @@ while true do
     case comparison_mode
     when 0x00
       val1, val2 = file.read_variable_length(2)
-      address, _ = file.unpack_read('L<')
+      address, _ = file.unpack_read('L<', ignore = true)
+      $stuff << raw.label(address)
       out.conditional_jump_equal(val1, val2, address)
     when 0x01
       val1, val2 = file.read_variable_length(2)
-      address, _ = file.unpack_read('L<')
+      address, _ = file.unpack_read('L<', ignore = true)
+      $stuff << raw.label(address)
       out.conditional_jump_inequal(val1, val2, address)
     when 0x02
       val1, val2 = file.read_variable_length(2)
-      address, _ = file.unpack_read('L<')
+      address, _ = file.unpack_read('L<', ignore = true)
+      $stuff << raw.label(address)
       out.conditional_jump_greater_or_equal(val1, val2, address)
     when 0x03
       val1, val2 = file.read_variable_length(2)
-      address, _ = file.unpack_read('L<')
+      address, _ = file.unpack_read('L<', ignore = true)
+      $stuff << raw.label(address)
       out.conditional_jump_greater_than(val1, val2, address)
     when 0x04
       val1, val2 = file.read_variable_length(2)
-      address, _ = file.unpack_read('L<')
+      address, _ = file.unpack_read('L<', ignore = true)
+      $stuff << raw.label(address)
       out.conditional_jump_less_or_equal(val1, val2, address)
     when 0x05
       val1, val2 = file.read_variable_length(2)
-      address, _ = file.unpack_read('L<')
+      address, _ = file.unpack_read('L<', ignore = true)
+      $stuff << raw.label(address)
       out.conditional_jump_less_than(val1, val2, address)
     when 0x06
       val1, val2 = file.read_variable_length(2)
-      address, _ = file.unpack_read('L<')
+      address, _ = file.unpack_read('L<', ignore = true)
+      $stuff << raw.label(address)
       out.conditional_jump_0x06(val1, val2, address)
     when 0x86
       val1, val2 = file.read_variable_length(2)
-      address, _ = file.unpack_read('L<')
+      address, _ = file.unpack_read('L<', ignore = true)
+      $stuff << raw.label(address)
       out.conditional_jump_0x86(val1, val2, address)
     else
       puts "Unknown comparison mode"
       break
     end
   when 0x47 # jump to address unconditionally ?
-    address, _ = file.unpack_read('L<')
+    address, _ = file.unpack_read('L<', ignore = true)
+    $stuff << raw.label(address)
     out.unconditional_jump(address)
   when 0x48 # gosub?
-    address, _ = file.unpack_read('L<')
+    address, _ = file.unpack_read('L<', ignore = true)
+    $stuff << raw.label(address)
     out.ins_0x48(address)
   when 0x49 # return?
     out.ins_0x49
   when 0x4a # jump on value?
     value, _ = file.read_variable_length(1)
     len, _ = file.unpack_read('S<')
-    targets = file.unpack_read('L<' * len)
+    targets = file.unpack_read('L<' * len, ignore = true)
+    $stuff += targets.map { |e| raw.label(e) }
     out.table_goto(value, targets)
   when 0x4b # another kind of jump on value
     # register is likely related to val1 from 0x46 0x00
     register, len = file.unpack_read('CS<')
-    targets = file.unpack_read('L<' * len)
+    targets = file.unpack_read('L<' * len, ignore = true)
+    $stuff += targets.map { |e| raw.label(e) }
     out.ins_0x4b(register, targets)
   when 0x4c # ??
     data = file.unpack_read('CCCC')
@@ -1891,9 +2025,12 @@ while true do
     values = file.unpack_read('S<' * len)
     out.stack_pop(values)
   when 0x4f # function call
+    raw_override = true
     address, len = file.unpack_read('L<C')
     puts "Greater than 0xffff!" if address > 0xffff
+    $stuff = []
     data = file.read_variable_length(len)
+    raw << "s.ins 0x4f, #{raw.label(address)}, [#{$stuff.join(', ')}]"
     out.call(address, data)
   when 0x50 # return from function called with 0x4f
     out.return
@@ -1933,9 +2070,10 @@ while true do
       dialogue_num_low_bytes, dialogue_num_high_byte, var1, length = file.unpack_read('S<CCS<')
       dialogue_num = (dialogue_num_high_byte << 16) | dialogue_num_low_bytes
     else
-      dialogue_num, var1, length = file.unpack_read('L<CS<')
+      dialogue_num, var1, length = file.unpack_read('L<C')
+      length, _ = file.unpack_read('S<', ignore = true)
     end
-    str = file.read_shift_jis(length)
+    str = file.read_shift_jis(length, true)
     out.dialogue(dialogue_num, var1, length, str)
     break if dialogue_num > max_dialogue
   when 0x87 # dialogue pipe wait
@@ -1959,9 +2097,9 @@ while true do
   when 0x8d # some kind of internal call
     val1, val2, register = file.unpack_read('S<S<S<')
     val3, _ = file.read_variable_length(1)
-    len, _ = file.unpack_read('S<')
+    len, _ = file.unpack_read('S<', ignore = true)
     code = file.read_shift_jis(len)
-    len, _ = file.unpack_read('S<')
+    len, _ = file.unpack_read('S<', ignore = true)
     data = file.read_shift_jis(len)
     out.ins_0x8d(val1, val2, register, val3, code, data)
   when 0x8e
@@ -2011,7 +2149,7 @@ while true do
     val1, val2, val3, val4, val5 = file.read_variable_length(5)
     out.ins_0x9b(val1, val2, val3, val4, val5)
   when 0x9c # only used in saku, *probably* plays a voice independent from dialogue?
-    len, _ = file.unpack_read('S<')
+    len, _ = file.unpack_read('S<', ignore = true)
     str = file.read_shift_jis(len) # example of such a string: "02/10800000", which references a voice file where Krauss says "otousan! otousan!
     val1, val2 = file.read_variable_length(2) # val1 is probably a volume
     out.play_voice(str, val1, val2)
@@ -2022,7 +2160,8 @@ while true do
     val1, val2 = file.read_variable_length(2)
     out.ins_0x9f(val1, val2)
   when 0xa0 # section title
-    type, length = file.unpack_read('CS<')
+    type, _ = file.unpack_read('C')
+    length, _ = file.unpack_read('S<', ignore = true)
     str = file.read_shift_jis(length)
     out.section_title(type, str)
   when 0xa1 # set timer?
@@ -2224,7 +2363,7 @@ while true do
     data = file.read_variable_length(1)
     out.ins_0xe4_saku(data)
   when 0xff # another type of internal call
-    length, _ = file.unpack_read('S<')
+    length, _ = file.unpack_read('S<', ignore = true)
     code = file.read_shift_jis(length)
     argument_length, _ = file.unpack_read('C')
     arguments = file.read_variable_length(argument_length)
@@ -2242,9 +2381,20 @@ while true do
     puts "Unknown instruction"
     break
   end
+
+  unless raw_override
+    raw << "s.ins #{(['0x' + instruction.to_s(16)] + $stuff).join(', ')}"
+  end
 end
+
+raw << "snr.write_script(s.data, entry_point, s.dialogue_line_count)"
+raw << "end"
 
 puts "Writing..."
 
-out.write(output_path) if output_path
+if output_path
+  out.write(output_path)
+  raw.write(output_path + "_raw.rb")
+end
+
 File.write(dialogue_path, out.dialogue_lines.join("\n")) if dialogue_path
