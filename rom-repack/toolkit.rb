@@ -6,18 +6,18 @@ PackedFile = Struct.new(:name, :folder?, :content)
 FolderStruct = Struct.new(:data, :size, :flat_location)
 
 class KalRom2File
-  FILE_ALIGNMENT = 9
-  FOLDER_ALIGNMENT = 4
+  FILE_ALIGNMENT = 9 # Files are aligned to 2**9 bytes in rom files
+  FOLDER_ALIGNMENT = 4 # Folders are aligned to 2**4 bytes
 
   attr_accessor :files
 
   def initialize(header_size = 0x24600)
     @header_size = header_size
-    @next_file = header_size
+    @next_file = header_size # where the next file should be written (at the end of the header, initially)
 
     @s = StringIO.new
     @s.binmode
-    @s.write("ROM2\x01\x00\x01\x00")
+    @s.write("ROM2\x01\x00\x01\x00") # Magic number, and some values I'm unsure about
     @header_pos = @s.pos
 
     @files = []
@@ -37,7 +37,10 @@ class KalRom2File
       folders_to_process.each do |name, folder, parent_name, is_root|
         location = header.pos
         data, size, other_folder_offsets, subfolders = write_folder(name, folder, parent_name, is_root)
-        folder_offsets += other_folder_offsets.map { |o, name| [o + location, name] } # Add location of current folder in the header to all offsets, as the references to other folders are relative to the header
+
+        # Add location of current folder in the header to all offsets, as the
+        # references to other folders are relative to the header
+        folder_offsets += other_folder_offsets.map { |o, name| [o + location, name] }
         new_folders_to_process += subfolders
 
         header.write(data)
@@ -61,7 +64,16 @@ class KalRom2File
     @s.seek(@header_pos)
     align = (1 << FOLDER_ALIGNMENT) - 1
     @s.write([(header.length + align) & ~align].pack('L<'))
-    @s.write "\x00\x02\x00\x00\x65\xA1\xA3\x88\x4B\x08\x7E\x6A\x9C\xB1\x1D\xE6\x43\x45\x05\x07" # some random values, I hope these are not relevant for anything...
+
+    # No idea what these values are
+    @s.write "\x00\x02\x00\x00"
+
+    # Given how I can not recognise any pattern in this, and given how Saku has
+    # 16 similarly pattern-less, but completely different, bytes in their place,
+    # my assumption is that this is a kind of checksum to validate the files'
+    # integrity. But Kal's engine does not appear to validate this checksum,
+    # so it is kind of meaningless anyway
+    @s.write "\x65\xA1\xA3\x88\x4B\x08\x7E\x6A\x9C\xB1\x1D\xE6\x43\x45\x05\x07"
     @s.write(header.string)
 
     puts "Writing to string..."
@@ -146,6 +158,8 @@ class KalRom2File
   end
 end
 
+# Recursive method to turn a folder structure into nested PackedFiles, to be
+# used for KalRom2File
 def load_packed_file_from_folder_recursive(path, name = :root, replacements = {})
   result = []
 

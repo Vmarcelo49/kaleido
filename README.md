@@ -10,9 +10,11 @@ The script also works with Umineko Saku; this is not a given because the two use
 
 It must be noted that while Kal and Saku do not differ that much from each other (see differences section below), both are very different from previous console VN releases using the SNR format. Previously made tools, like Umineko Project's SNR parser, are essentially useless in parsing Kal's and Saku's SNR format (especially the script section), except for some cases where looking at the code gave me some inspiration on how certain things are to be interpreted.
 
+**NEW**: In addition to this one-way parsing transformation, I also added some scripts to *create* SNR and rom files from certain inputs. This allows modding the games (or rather, only Kal, because Saku's engine is much stricter on file integrity). For more information, see the readme in the [`rom-repack` folder](https://gitlab.com/Neurochitin/kaleido/-/tree/saku/rom-repack)
+
 ## Current status:
 
-Applies to both Kal and Saku in theory, although I usually only test with Kal.
+These are the supported features for the SNR-to-Ponscripter transformation. Applies to both Kal and Saku in theory, although I usually only test with Kal.
 
  - [x] Successfully parses the entire file
  - [x] Dialogue
