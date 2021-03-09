@@ -12,13 +12,14 @@ class KalRom2File
 
   attr_accessor :files
 
-  def initialize(header_size = 0x24600)
+  def initialize(header_size = 0x24600, val1 = 1, val2 = 1)
     @header_size = header_size
     @next_file = header_size # where the next file should be written (at the end of the header, initially)
 
     @s = StringIO.new
     @s.binmode
-    @s.write("ROM2\x01\x00\x01\x00") # Magic number, and some values I'm unsure about
+    @s.write("ROM2")
+    @s.write([val1, val2].pack('S<S<'))
     @header_pos = @s.pos
 
     @files = []
