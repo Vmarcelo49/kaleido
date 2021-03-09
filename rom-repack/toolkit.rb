@@ -1,6 +1,7 @@
 # Classes and utils for creating rom files
 
 require 'stringio'
+require 'digest'
 
 PackedFile = Struct.new(:name, :folder?, :content)
 FolderStruct = Struct.new(:data, :size, :flat_location)
@@ -59,21 +60,24 @@ class KalRom2File
       header.write([f.flat_location, f.size].pack('L<L<'))
     end
 
+    header.seek(0, IO::SEEK_END)
+    align = (1 << FOLDER_ALIGNMENT) - 1
+    fill = ((header.length + align) & ~align) - header.length
+    header.write("\x00" * fill)
+
     raise "Header size too big" if header.length > @header_size
 
     @s.seek(@header_pos)
-    align = (1 << FOLDER_ALIGNMENT) - 1
-    @s.write([(header.length + align) & ~align].pack('L<'))
+    puts "Length of header: 0x#{header.length.to_s(16)}"
+    @s.write([header.length].pack('L<'))
 
-    # No idea what these values are
-    @s.write "\x00\x02\x00\x00"
+    # Thanks to TellowKrinkle for letting me know what these values in the header are!
+    @s.write [1 << FILE_ALIGNMENT].pack('L<')
+    digest = Digest::MD5.digest(header.string)
+    @s.write digest
+    puts "MD5 of header: #{Digest.hexencode(digest)}"
 
-    # Given how I can not recognise any pattern in this, and given how Saku has
-    # 16 similarly pattern-less, but completely different, bytes in their place,
-    # my assumption is that this is a kind of checksum to validate the files'
-    # integrity. But Kal's engine does not appear to validate this checksum,
-    # so it is kind of meaningless anyway
-    @s.write "\x65\xA1\xA3\x88\x4B\x08\x7E\x6A\x9C\xB1\x1D\xE6\x43\x45\x05\x07"
+    # Write the header itself
     @s.write(header.string)
 
     puts "Writing to string..."
