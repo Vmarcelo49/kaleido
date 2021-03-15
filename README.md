@@ -25,7 +25,7 @@ These are the supported features for the SNR-to-Ponscripter transformation. Appl
    - [ ] Animations
    - [ ] `%TIME%`
  - [x] Sprites (still has a lot of bugs)
-   - [ ] Positioning
+   - [x] Positioning
    - [ ] Animations
    - [ ] `%DRESS%`
  - [x] BGM

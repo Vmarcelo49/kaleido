@@ -10,7 +10,11 @@ path = ARGV[0] # Input .snr file.
 output_path = ARGV[1] # Output file. (Optional)
 max_dialogue = ARGV[2] ? ARGV[2].to_i : 100000000 # Maximum amount of dialogue that will be parsed, useful if you are trying to quickly prototype some dialogue-independent functionality
 dialogue_path = ARGV[3] # Optional; if present, a file containing only the raw dialogue lines will be written to this location.
+base_path = ARGV[4] || '.' # If present, it will read bustups and pics from this path and add their origin positions to lookup tables. This is necessary if you want accurate sprite positioning.
+dialogue_path = nil if dialogue_path == 'nil'
+
 $stuff = []
+
 
 # Calculate the SHA256 value of the given script, to find out which mode to use.
 sha256 = Digest::SHA256.hexdigest(File.read(path))
@@ -61,12 +65,14 @@ HALFWIDTH_REPLACE = '「」ぁぃぅぇぉゃゅょあいうえおかきくけ�
 # File references, this is how assets must be stored relative to the output script path.
 BG_FOLDER = 'bg'
 BG_EXT = '.png'
-
 SPRITE_FOLDER = 'sprites'
-
 BGM_FOLDER = 'bgm'
 SE_FOLDER = 'se'
 MOVIE_FOLDER = 'movie'
+
+# Used as source folders for bup/pic origin retrieval
+BUSTUP_FOLDER = 'bustup'
+PICTURE_FOLDER = 'picture'
 
 # If true, certain internal instructions (NCSELECT) are ignored while parsing, as they
 # are when playing the game normally. If false, it can be considered as
@@ -476,20 +482,6 @@ class OutFile
   # - utility methods for frequently-used NSC code - #
   # ------------------------------------------------ #
 
-  def read_sprite_cache_for_sp2(slot)
-    "?sprite_x_positions[#{slot}] + #{SCREEN_WIDTH / 2}, ?sprite_y_positions[#{slot}] + #{SCREEN_HEIGHT / 2}, ?sprite_x_scales[#{slot}] / 10, ?sprite_y_scales[#{slot}] / 10, ?sprite_rotation_angles[#{slot}]"
-  end
-
-  def load_sprite_cached(slot, to_load)
-    self << %(lsph #{slot}, #{to_load}, 0, 0) # regular hidden sprite, for measuring purposes
-    self << %(lsp2 #{slot}, #{to_load}, #{read_sprite_cache_for_sp2(slot)})
-  end
-
-  def sprite_cache_set(slot, what, value)
-    self << %(mov ?sprite_#{what}s[#{slot}], #{value})
-    self << %(amsp2 #{slot}, #{read_sprite_cache_for_sp2(slot)})
-  end
-
   # Used for e.g. chapter titles, "now playing".
   # x_/y_origin: shows where in the image x and y should refer to.
   # 0,0 = center, -1/-1 = top left, -1/1 = bottom left, etc
@@ -522,6 +514,8 @@ class OutFile
         when "@r" # newline
           result_str += "\n^#{content}"
         when "@v" # play voice
+          # TODO: support for multiple simultaneous voices, like:
+          # @r@o70.@v10/10100255|13/10400165.「「うーうーうーうー！！！」」
           voice_name, text = content.split(".")
           result_str += %(/\nwave "voice/#{voice_name}.wav"\n^#{text})
         when "@b" # begin furigana
@@ -556,15 +550,18 @@ class OutFile
           result_str += "#{content}"
         when "@w" # waiting for a specified amount of time?
           result_str += "/\n; wait #{content}\n^"
-        when "@o" # NYI
-        when "@a" # NYI
+        when "@o" # Maybe sets voice volume?
+          # Frequently used when multiple voices are playing, and the value is
+          # usually lower the more voices are playing at once.
+        when "@a" # Possibly sets text speed/fade in mode?
         when "@z" # Font size in percent
           percent_size, text = content.split(".")
           result_str += "~%#{percent_size}~#{text}"
-        when "@s" # NYI
-        when "@{" # NYI
-        when "@}" # NYI
-        when "@e" # NYI
+        when "@s" # Sets display speed of individual characters
+          # If used as @s0., it probably sets each character to be displayed individually?
+        when "@{" # Start of bold text
+        when "@}" # End of bold text
+        when "@e" # Perhaps prevents fast-forward mode or something?
         when "@c" # Coloured text
           colour, text = content.split(".")
 
@@ -579,8 +576,8 @@ class OutFile
             hex_colour = '#' + colour_num.to_s(16).rjust(6, '0')
             result_str += hex_colour
           end
-        when "@t" # NYI
-        when "@-" # NYI
+        when "@t" # Delineates two simultaneously appearing lines
+        when "@-" # No idea what this means, only used in Umineko extra content
         else
           raise "Unrecognised dialogue tag: #{tag}"
         end
@@ -1071,14 +1068,16 @@ class OutFile
     debug "resource command (0xc1) 0x2 (load background) mode 0x1, slot #{slot}, val1: #{val1}, picture index: #{picture_index}"
 
     self << "#{LookupTable.for("background")} #{nscify(picture_index)}"
-    load_sprite_cached(nscify_slot(slot), '$i2')
+    self << "enter_lsp #{nscify_slot(slot)}, $i2, %pic_origin_x, %pic_origin_y, 0, 0, 100"
+    self << "print 2"
   end
 
   def load_background_0x3(slot, val1, picture_index, val3)
     debug "resource command (0xc1) 0x2 (load background) mode 0x3, slot #{slot}, val1: #{val1}, picture index: #{picture_index}, val3: #{val3}"
 
     self << "#{LookupTable.for("background")} #{nscify(picture_index)}"
-    load_sprite_cached(nscify_slot(slot), '$i2')
+    self << "enter_lsp #{nscify_slot(slot)}, $i2, %pic_origin_x, %pic_origin_y, 0, 0, 100"
+    self << "print 2"
   end
 
   def load_sprite(slot, val1, mode, sprite_index, val4, face_id, val6)
@@ -1089,11 +1088,13 @@ class OutFile
       self << "^load sprite slot=^#{nscify(slot)}^ val1=^#{nscify(val1)}^ mode=^#{mode}}"
     when 0x01 # saku default
       self << "#{LookupTable.for("bustup")} #{nscify(sprite_index)}"
-      load_sprite_cached(nscify_slot(slot), 'c_sprite_folder + "\" + $i2 + "_" + $i3 + "_1.png"')
+      self << %(enter_lsp #{nscify_slot(slot)}, c_sprite_folder + "/" + $i2 + "_" + $i3 + "_1.png", %bup_origin_x, %bup_origin_y, %bup_offset_x, %bup_offset_y, %bup_scale)
+      self << "print 2"
     when 0x0f # kal default
       self << "#{LookupTable.for("bustup")} #{nscify(sprite_index)}"
       self << "itoa_pad $i3, #{nscify(face_id)}, 3"
-      load_sprite_cached(nscify_slot(slot), 'c_sprite_folder + "\" + $i2 + "_" + $i3 + ".png"')
+      self << %(enter_lsp #{nscify_slot(slot)}, c_sprite_folder + "/" + $i2 + "_" + $i3 + ".png", %bup_origin_x, %bup_origin_y, %bup_offset_x, %bup_offset_y, %bup_scale)
+      self << "print 2"
     else
       self << "^load sprite slot=^#{nscify(slot)}^ val1=^#{nscify(val1)}^ mode=^#{mode}^ sprite_index=^#{nscify(sprite_index)}}"
     end
@@ -1156,17 +1157,16 @@ class OutFile
     debug "sprite wait (0xc3) 0x00, values: #{slot} #{val2}"
   end
 
-  def sprite_set_basic_transform(slot, target, value) # used frequently in saku
-    #@h[@offset] << "^spritewait 0x01 slot=^#{nscify(slot)}^,target=^#{nscify(target)}^,value=^#{nscify(value)}"
-    debug "sprite set basic transform, slot: #{slot}, target: #{target}, value: #{value}"
+  def sprite_set_basic_transform(slot, target, value, delegate = false) # used frequently in saku
+    debug "sprite set basic transform, slot: #{slot}, target: #{target}, value: #{value}" unless delegate
 
+    # Special handling in the future
     case target.value!
     when 0x00 # X position?
-      self << "mov %i2, #{nscify(value)} + 0"
-      sprite_cache_set(nscify_slot(slot), "x_position", "%i2")
     when 0x01 # Y position?
-      self << "mov %i2, #{nscify(value)} + 0"
-      sprite_cache_set(nscify_slot(slot), "y_position", "%i2")
+    when 0x02 # empirically visibility: 0 = invisible, other values = visible
+    when 0x03 # empirically also X position
+    when 0x04 # empirically also Y position
     when 0x05 # most likely Z position, which is not really supported as is in ponscripter.
       # IDEA of how to support this and also get around certain other snr
       # ideosyncrasies regarding sprite slots: have an automatically maintained
@@ -1174,21 +1174,54 @@ class OutFile
       # can be moved around to change their Z index. This would be quite a clean
       # solution but has the disadvantage of requiring implementations of
       # complex data structures entirely within NSC...
-
-      nyi
-      #self << "mov %i2, #{nscify(value)} + 0"
-      #sprite_cache_set(nscify_slot(slot), "y_position", "%i2")
+    when 0x06 # empirically red channel, 1000 = normal
+    when 0x07 # empirically green channel, 1000 = normal
+    when 0x08 # empirically blue channel, 1000 = normal
+    when 0x09 # empirically alpha channel, 1000 = normal
+    when 0x0a # no empirical effect determined yet
+    when 0x0b # no empirical effect determined yet
     when 0x0c # X scaling, 1000 = normal
-      self << "mov %i2, #{nscify(value)} / 1"
-      sprite_cache_set(nscify_slot(slot), "x_scale", "%i2")
     when 0x0d # Y scaling, 1000 = normal
-      self << "mov %i2, #{nscify(value)} / 1"
-      sprite_cache_set(nscify_slot(slot), "y_scale", "%i2")
-    when 0x1a # most likely turns a sprite to monochrome. I don't think ponscripter supports this
+    when 0x0e # empirically also X scaling, 1000 = normal
+    when 0x0f # empirically also Y scaling, 1000 = normal
+    when 0x10 # no empirical effect determined yet
+    when 0x11 # no empirical effect determined yet
+    when 0x12 # empirically rotation: 0 = 0°, 500 = 180°, 1000 = 360°
+    when 0x13 # empirically also rotation: 0 = 0°, 500 = 180°, 1000 = 360°
+    when 0x14 # empirically X position but in the other direction
+    when 0x15 # empirically Y position but in the other direction
+    when 0x16 # empirically also visibility, 0 = invisible
+    when 0x17 # has an empirical effect but I don't know what exactly. 2 turns the sprite invisible
+    when 0x18 # various empirical effects
+      # 0 = normal
+      # 1 = monochrome
+      # 2 = white silhouette
+      # 3 = ??
+      # 4 = inverted
+      # 5-7 = ??
+      # 8 = no effect
+    when 0x19 # no empirical effect
+    when 0x1a # I am not sure about this one.
+      # Empirically, in Kal, it is responsible for flipping the sprite:
+      # 0 = normal
+      # 1 = flipped horizontally
+      # 2 = flipped vertically
+      # 4 = no visible effect
+      # However, in Saku it appears to be used to turn a sprite monochrome
       self << "; monochrome sprite"
+    when 0x1b # no empirical effect
+    when 0x1c # no empirical effect. Saku's code suggests 1000 is a "normal" value
+    when 0x1d # no empirical effect. Saku's code suggests 1000 is a "normal" value
+    when 0x1e # no empirical effect. Saku's code suggests 1000 is a "normal" value
+    when 0x1f # no empirical effect. Saku's code suggests 1000 is a "normal" value
+    when 0x20 # no empirical effect
     else
       nyi
     end
+
+    self << %(mov ?#{20 + target.value!}[#{nscify_slot(slot)}], #{nscify(value)})
+    self << %(enter_msp #{nscify_slot(slot)})
+    self << "print 2"
   end
 
   def sprite_wait_0x02(slot, val2, val3)
@@ -1228,31 +1261,12 @@ class OutFile
   end
 
   def sprite_set_complex_transform(slot, target, value, duration, val5, val6) # used often in kal, probably for its animation-like effects
-    debug "sprite set complex transform, slot: #{slot}, target: #{target}, value: #{value}, duration: #{duration}, val5: #{val5}, val6: #{val6}"
-    #self << "^spritewait 0x0f slot=^#{nscify(slot)}^,target=^#{nscify(target)}^,value=^#{nscify(value)}^,duration=^#{nscify(duration)}^,val5=^#{nscify(val5)}^,val6=^#{nscify(val6)}"
-    case slot.value!
-    when SPRITE_SLOT_MAIN
-      case target.value!
-      when 0x00 # X position
-        self << "mov %i2, #{nscify(value)} + 0"
-        sprite_cache_set(nscify_slot(slot), "x_position", "%i2")
-      when 0x01 # Y position
-        self << "mov %i2, #{nscify(value)} + 0"
-        sprite_cache_set(nscify_slot(slot), "y_position", "%i2")
-      when 0x0c # X scaling, 1000 = normal
-        self << "mov %i2, #{nscify(value)} / 1"
-        sprite_cache_set(nscify_slot(slot), "x_scale", "%i2")
-      when 0x0d # Y scaling, 1000 = normal
-        self << "mov %i2, #{nscify(value)} / 1"
-        sprite_cache_set(nscify_slot(slot), "y_scale", "%i2")
-      else
-        # 0x1 = background
-        # 0xd, 0xc, 0x9, 0x12 = ?
-        nyi
-      end
-    else
-      nyi
-    end
+    debug "sprite set complex transform, slot: #{slot}, target: #{target}, value: #{value}, duration: #{duration}, val5: #{val5}, val6: #{val6}. DELEGATING TO BASIC TRANSFORM"
+
+    # Ponscripter does not natively support animations like this. So for now
+    # we are not going to implement them. Perhaps in the future something like
+    # setting one of the values continuously over some timespan could be done.
+    sprite_set_basic_transform(slot, target, value, true)
   end
 
   def ins_0xc0(slot)
@@ -1447,17 +1461,17 @@ class OutFile
     debug "instruction 0xe0 (Saku specific), data: #{data}"
   end
 
-  def ins_0xe1_saku(data)
+  def ins_0xe1_saku(data) # related to notes/tips
     nyi
     debug "instruction 0xe1 (Saku specific), data: #{data}"
   end
 
-  def ins_0xe2_saku(data)
+  def ins_0xe2_saku(data) # used for certain selections
     nyi
     debug "instruction 0xe2 (Saku specific), data: #{data}"
   end
 
-  def ins_0xe3_saku(data)
+  def ins_0xe3_saku(data) # most likely just opens the character screen, used only once
     nyi
     debug "instruction 0xe3 (Saku specific), data: #{data}"
   end
@@ -1567,6 +1581,16 @@ class LookupTable
   def entry_for(id); "lt_#{@name}_entry_#{id}"; end
 end
 
+# Load origin positions from a file. This file may be bup or pic, it remains to be
+# checked if non-Kal style files work too
+def read_origin(file_path)
+  file = File.open(file_path, 'rb')
+  file.seek(0xc)
+  result = file.read(4).unpack('s<s<') # assuming these are signed
+  puts "Read origin of file #{file_path}: #{result}"
+  result
+end
+
 # Parse file header
 magic = file.read(4)
 if magic != 'SNR '
@@ -1632,8 +1656,15 @@ file.read_table(bg_offset) do |n|
   out.backgrounds[n] = Background.new(name, file.pos, val1)
   raw << "snr.bg '#{raw_name}', #{val1}"
 
-  lut.append(n, [["$i2", out.raw_background(n)]])
+  lut_entry = []
+  lut_entry << ["$i2", out.raw_background(n)]
 
+  bg_path = File.join(base_path, PICTURE_FOLDER, name + '.pic')
+  x_origin, y_origin = File.exist?(bg_path) ? read_origin(bg_path) : [0, 0]
+  lut_entry << ["%pic_origin_x", x_origin]
+  lut_entry << ["%pic_origin_y", y_origin]
+
+  lut.append(n, lut_entry)
   out << "; Background 0x#{n.to_s(16)} at 0x#{file.pos.to_s(16)}: #{name} (val1 = 0x#{val1.to_s(16)})"
   out << %(stralias #{out.raw_background(n)}, "#{File.join(BG_FOLDER, name + BG_EXT)}")
 end
@@ -1647,10 +1678,10 @@ lut = LookupTable.new("bustup")
 
 if MODE == :kal
   # In Kal, bustups only have one name, but a bunch of values at the end.
-  Bustup = Struct.new(:name, :offset, :val1, :val2, :val3, :val4)
+  Bustup = Struct.new(:name, :offset, :character_id, :scale_percent, :x_offset, :y_offset)
 else
   # In Saku, bustups have two strings (what I assume are name and expression), and only one value at the end.
-  Bustup = Struct.new(:name, :expression, :offset, :val1)
+  Bustup = Struct.new(:name, :expression, :offset, :character_id)
 end
 
 file.read_table(bustup_offset) do |n|
@@ -1658,30 +1689,44 @@ file.read_table(bustup_offset) do |n|
   len, _ = file.unpack_read(MODE == :konosuba ? 'C' : 'S<')
   if MODE == :kal
     name = file.read_shift_jis(len)
+    puts name
     raw_name = name.clone
-    name.gsub!("%DRESS%", "首輪")
-    val1, val2, val3, val4 = file.unpack_read('S<S<S<s<')
-    out.bustups[n] = Bustup.new(name, file.pos, val1, val2, val3, val4)
-    raw << "snr.bustup '#{raw_name}', #{val1}, #{val2}, #{val3}, #{val4}"
+    name.gsub!("%DRESS%", "首輪") # TODO: do this in a smarter way
+    character_id, scale_percent, x_offset, y_offset = file.unpack_read('S<S<S<s<')
+    out.bustups[n] = Bustup.new(name, file.pos, character_id, scale_percent, x_offset, y_offset)
+    raw << "snr.bustup '#{raw_name}', #{character_id}, #{scale_percent}, #{x_offset}, #{y_offset}"
 
     lut_entry = []
     lut_entry << ["$i2", out.raw_bustup(n)]
-    # potentially add more data here? like offsets etc.
+    lut_entry << ["%bup_offset_x", x_offset]
+    lut_entry << ["%bup_offset_y", y_offset]
+    lut_entry << ["%bup_scale", scale_percent]
+
+    bup_path = File.join(base_path, BUSTUP_FOLDER, name + '.bup')
+    x_origin, y_origin = File.exist?(bup_path) ? read_origin(bup_path) : [0, 0]
+    lut_entry << ["%bup_origin_x", x_origin]
+    lut_entry << ["%bup_origin_y", y_origin]
+
     lut.append(n, lut_entry)
-    out << "; Bustup 0x#{n.to_s(16)} at 0x#{file.pos.to_s(16)}: #{name} (val1 = 0x#{val1.to_s(16)}, val2 = 0x#{val2.to_s(16)}, val3 = 0x#{val3.to_s(16)}, val4 = 0x#{val4.to_s(16)})"
+    out << "; Bustup 0x#{n.to_s(16)} at 0x#{file.pos.to_s(16)}: #{name} (character_id = 0x#{character_id.to_s(16)}, scale_percent = 0x#{scale_percent.to_s(16)}, x_offset = 0x#{x_offset.to_s(16)}, y_offset = 0x#{y_offset.to_s(16)})"
   else
     name = file.read_shift_jis(len)
     len, _ = file.unpack_read(MODE == :konosuba ? 'C' : 'S<')
     expr = file.read_shift_jis(len)
-    val1, _ = file.unpack_read('S<')
-    out.bustups[n] = Bustup.new(name, expr, file.pos, val1)
+    character_id, _ = file.unpack_read('S<')
+    out.bustups[n] = Bustup.new(name, expr, file.pos, character_id)
 
     lut_entry = []
     lut_entry << ["$i2", out.raw_bustup(n)]
     lut_entry << ["$i3", %("#{expr}")]
-    # potentially add more data here? like offsets etc.
+
+    bup_path = File.join(base_path, BUSTUP_FOLDER, name + '.bup')
+    x_origin, y_origin = File.exist?(bup_path) ? read_origin(bup_path) : [0, 0]
+    lut_entry << ["%bup_origin_x", x_origin]
+    lut_entry << ["%bup_origin_y", y_origin]
+
     lut.append(n, lut_entry)
-    out << "; Bustup 0x#{n.to_s(16)} at 0x#{file.pos.to_s(16)}: #{name} #{expr} (val1 = 0x#{val1.to_s(16)})"
+    out << "; Bustup 0x#{n.to_s(16)} at 0x#{file.pos.to_s(16)}: #{name} #{expr} (character_id = 0x#{character_id.to_s(16)})"
   end
   out << %(stralias #{out.raw_bustup(n)}, "#{name}")
 end
