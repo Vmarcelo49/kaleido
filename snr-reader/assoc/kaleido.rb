@@ -149,6 +149,10 @@ ADDRESSES = {
   # Subroutines (gosub)
 }
 
+# The offset that is added to addresses in the script section. This is a bit
+# of a hack, TODO: find out how to do this more elegantly
+RAW_SCRIPT_FIX_OFFSET = 8
+
 # Characters:
 # 0 = Fuuka
 # 1 = Karin

@@ -22,6 +22,8 @@ ADDRESSES = {
   'addr_0x926e2' => 'f_mask_transition',
 }
 
+RAW_SCRIPT_FIX_OFFSET = 20
+
 REGISTERS = {}
 
 FF_CALLS = {}

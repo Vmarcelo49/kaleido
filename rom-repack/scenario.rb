@@ -1,15 +1,22 @@
 # Tools that can be used to create SNR files
 
 require 'stringio'
+require '../utils.rb'
 
-CONVERTER = Encoding::Converter.new('UTF-8', 'SHIFT_JIS', invalid: :replace)
-HALFWIDTH = '｢｣ｧｨｩｪｫｬｭｮｱｲｳｴｵｶｷｸｹｺｻｼｽｾｿﾀﾁﾂﾃﾄﾅﾆﾇﾈﾉﾊﾋﾌﾍﾎﾏﾐﾑﾒﾓﾔﾕﾖﾗﾘﾙﾚﾛﾜｦﾝｰｯ､ﾟﾞ･?｡　'
-HALFWIDTH_REPLACE = '「」ぁぃぅぇぉゃゅょあいうえおかきくけこさしすせそたちつてとなにぬねのはひふへほまみむめもやゆよらりるれろわをんーっ、？！…　。�'
+HALFWIDTH = '｢｣ｧｨｩｪｫｬｭｮｱｲｳｴｵｶｷｸｹｺｻｼｽｾｿﾀﾁﾂﾃﾄﾅﾆﾇﾈﾉﾊﾋﾌﾍﾎﾏﾐﾑﾒﾓﾔﾕﾖﾗﾘﾙﾚﾛﾜｦﾝｰｯ､ﾟﾞ･?｡'
+HALFWIDTH_REPLACE = '「」ぁぃぅぇぉゃゅょあいうえおかきくけこさしすせそたちつてとなにぬねのはひふへほまみむめもやゆよらりるれろわをんーっ、？！…　。'
+
+SHIFT_JIS_REVERSE_MAPPINGS = {
+  "e2 85 a1" => "\x87\x55",
+  "e2 85 a2" => "\x87\x56",
+  "e2 85 a3" => "\x87\x57",
+  "ee 84 90" => "\xa0", # convert our private use character to Entergram's actual compact half width space
+}
 
 class StringIO
   # Write length delimited SHIFT_JIS
-  def write_str(str, halfwidth_replace = false)
-    converted = KalSNRFile.to_shift_jis(str, halfwidth_replace)
+  def write_str(str)
+    converted = KalSNRFile.to_shift_jis(str)
     write([converted.bytes.length].pack('S<'))
     write(converted.bytes.pack('C*'))
   end
@@ -33,11 +40,16 @@ class KalSNRFile
   VOICE_OFFSET_LOCATION = 0x3c
   TABLE8_OFFSET_LOCATION = 0x40
   TABLE9_OFFSET_LOCATION = 0x44
-  FIRST_TABLE = 0x54
+  OFFSET10_LOCATION = 0x48
+  CHARACTERS_OFFSET_LOCATION = 0x4c
+  OFFSET12_LOCATION = 0x50
+  TIPS_OFFSET_LOCATION = 0x54
 
   SCRIPT_MAGIC = 0xb00246
 
-  def initialize(val1 = 0x1, val2 = 0x1)
+  def initialize(val1 = 0x1, val2 = 0x1, first_table = 0x54)
+    @mode = :kal
+
     @data = StringIO.new
     @data.binmode
 
@@ -46,11 +58,11 @@ class KalSNRFile
     @data.seek(VAL1_LOCATION)
     @data.write([val1, val2].pack('L<L<'))
 
-    @data.seek(FIRST_TABLE)
-
-    @mask_num, @bg_num, @bustup_num, @bgm_num, @se_num, @movie_num, @voice_num, @table8_num, @table9_num = 0, 0, 0, 0, 0, 0, 0, 0, 0
-    @masks, @bgs, @bustups, @bgms, @ses, @movies, @voices, @table8, @table9 = [], [], [], [], [], [], [], [], []
+    @data.seek(first_table)
+    @masks, @bgs, @bustups, @bgms, @ses, @movies, @voices, @table8, @table9, @characters, @tips = [], [], [], [], [], [], [], [], [], [], []
   end
+
+  attr_accessor :mode
 
   def write_to(file)
     File.write(file, data)
@@ -98,9 +110,16 @@ class KalSNRFile
 
   def write_bustups
     o = write_table(@bustups) do |s, bustup|
-      name, val1, val2, val3, val4 = bustup
-      s.write_str(name)
-      s.write([val1, val2, val3, val4].pack('S<S<S<s<'))
+      if @mode == :saku
+        name, expr, val1 = bustup
+        s.write_str(name)
+        s.write_str(expr)
+        s.write([val1].pack('S<'))
+      else
+        name, val1, val2, val3, val4 = bustup
+        s.write_str(name)
+        s.write([val1, val2, val3, val4].pack('S<S<S<s<'))
+      end
     end
     at(BUSTUP_OFFSET_LOCATION) { @data.write([o].pack('L<'))}
   end
@@ -158,9 +177,9 @@ class KalSNRFile
 
   def write_voices
     o = write_table(@voices) do |s, voice|
-      name, val1, val2 = voice
+      name, *vals = voice
       s.write_str(name)
-      s.write([val1, val2].pack('CC'))
+      s.write(vals.pack('C*'))
     end
     at(VOICE_OFFSET_LOCATION) { @data.write([o].pack('L<'))}
   end
@@ -172,7 +191,7 @@ class KalSNRFile
   end
 
   def write_table8
-    o = write_table(@table8, length_prefix = false) do |s, entry|
+    o = write_table(@table8, size_prefix = false) do |s, entry|
       name, *data = entry
       s.write_str(name)
       s.write([data.length].pack('S<'))
@@ -188,33 +207,96 @@ class KalSNRFile
   end
 
   def write_table9
-    o = write_table(@table9, length_prefix = false) do |s, entry|
+    o = write_table(@table9, size_prefix = false) do |s, entry|
       val1, val2, val3 = entry
       s.write([val1, val2, val3].pack('S<S<S<'))
     end
     at(TABLE9_OFFSET_LOCATION) { @data.write([o].pack('L<'))}
   end
 
+  def write_offset10_data(data)
+    o = write_size_prefixed_data(data)
+    at(OFFSET10_LOCATION) { @data.write([o].pack('L<'))}
+  end
+
+  def character(*v)
+    index = @characters.length
+    @characters << v
+    index
+  end
+
+  def write_characters
+    o = write_table(@characters) do |s, character|
+      val1, segments = character
+
+      s.write([val1].pack('C'))
+
+      segments.each do |segment|
+        segment.each do |e|
+          if e.is_a? Numeric
+            s.write([e].pack('C'))
+          elsif e.is_a? String
+            s.write_str(e)
+          else
+            raise "Invalid type of element in segment"
+          end
+        end
+      end
+
+      s.write("\x00")
+    end
+    at(CHARACTERS_OFFSET_LOCATION) { @data.write([o].pack('L<'))}
+  end
+
+  def write_offset12_data(data)
+    o = write_size_prefixed_data(data)
+    at(OFFSET12_LOCATION) { @data.write([o].pack('L<'))}
+  end
+
+  def tip(*v)
+    index = @tips.length
+    @tips << v
+    index
+  end
+
+  def write_tips
+    o = write_table(@tips) do |s, tip|
+      val1, val2, name, content = tip
+      s.write([val1, val2].pack('CS<'))
+      s.write_str(name)
+      s.write_str(content)
+    end
+    at(TIPS_OFFSET_LOCATION) { @data.write([o].pack('L<'))}
+  end
+
+  def write_size_prefixed_data(data)
+    offset = @data.pos
+    @data.write([data.length].pack('L<'))
+    @data.write(data.pack('C*'))
+    align_to(0x3)
+    offset
+  end
+
   def write_script(script_data, entry_point, dialogue_line_count)
+    align_to(0xf)
     pos = @data.pos
     at(SCRIPT_OFFSET_LOCATION) { @data.write([pos].pack('L<'))}
     at(DIALOGUE_LINE_COUNT_LOCATION) { @data.write([dialogue_line_count].pack('L<'))}
     @data.write([SCRIPT_MAGIC, entry_point].pack('L<L<'))
     @data.write(script_data)
     align_to(0xf)
-    @data.write("\x00" * 16)
   end
 
-  def write_table(table, length_prefix = true)
+  def write_table(table, size_prefix = true)
     offset = @data.pos
     result = StringIO.new
-    result.seek(length_prefix ? 4 : 0)
+    result.seek(size_prefix ? 4 : 0)
     result.write([table.length].pack('L<'))
     table.each do |entry|
       yield result, entry
     end
 
-    if length_prefix
+    if size_prefix
       result.seek(0)
       result.write([result.length - 4].pack('L<'))
     end
@@ -225,11 +307,9 @@ class KalSNRFile
     offset
   end
 
-  def self.to_shift_jis(str, halfwidth_replace = false)
-    str = str.tr(HALFWIDTH_REPLACE, HALFWIDTH) if halfwidth_replace
-    converted = CONVERTER.convert(str) + "\x00"
-    # Replace fullwidth spaces to use Entergram's special one-byte space character (0xA0)
-    converted = converted.gsub("\x81\x40".force_encoding('SHIFT_JIS'), "\xA0".force_encoding('SHIFT_JIS')) if halfwidth_replace
+  def self.to_shift_jis(str)
+    converter = Encoding::Converter.new('UTF-8', 'SHIFT_JIS', invalid: :replace)
+    converted = Utils::convert_with_mappings(converter, str, SHIFT_JIS_REVERSE_MAPPINGS, 'SHIFT_JIS') + "\x00"
     converted
   end
 
@@ -301,7 +381,7 @@ class KalScript
       if e.is_a? Raw
         @data.write(e.str)
       elsif e.is_a? String
-        @data.write_str(e, opcode == 0x86)
+        @data.write_str(e)
       elsif e.is_a? Array
         @data.write([e.length].pack('C'))
         e.each { |f| write_varlen(f) }

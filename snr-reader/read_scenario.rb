@@ -2,6 +2,8 @@ require 'set'
 require 'digest'
 require 'stringio'
 
+require '../utils.rb'
+
 # colourise string
 class String; def c(a); "\e[#{a}m#{self}\e[0m"; end; end
 
@@ -14,7 +16,6 @@ base_path = ARGV[4] || '.' # If present, it will read bustups and pics from this
 dialogue_path = nil if dialogue_path == 'nil'
 
 $stuff = []
-
 
 # Calculate the SHA256 value of the given script, to find out which mode to use.
 sha256 = Digest::SHA256.hexdigest(File.read(path))
@@ -54,13 +55,13 @@ BITS = {
   4 => 'int'
 }
 
-# Converter to be used for converting from SJIS to UTF-8
-CONVERTER = Encoding::Converter.new('SHIFT_JIS', 'UTF-8', invalid: :replace)
-
-# Entergram uses halfwidth katakana instead of hiragana, probably to save a bit of space. We have to reverse this.
-# Each character in HALFWIDTH will be replaced with the corresponding one in HALFWIDTH_REPLACE
-HALFWIDTH = '｢｣ｧｨｩｪｫｬｭｮｱｲｳｴｵｶｷｸｹｺｻｼｽｾｿﾀﾁﾂﾃﾄﾅﾆﾇﾈﾉﾊﾋﾌﾍﾎﾏﾐﾑﾒﾓﾔﾕﾖﾗﾘﾙﾚﾛﾜｦﾝｰｯ､ﾟﾞ･?｡'
-HALFWIDTH_REPLACE = '「」ぁぃぅぇぉゃゅょあいうえおかきくけこさしすせそたちつてとなにぬねのはひふへほまみむめもやゆよらりるれろわをんーっ、？！…　。'
+# Additional byte mappings for UTF-8 to SHIFT-JIS
+SHIFT_JIS_MAPPINGS = {
+  "a0" => "\ue110", # Fullwidth space
+  "87 55" => "Ⅱ", # Roman numeral 2
+  "87 56" => "Ⅲ", # Roman numeral 3
+  "87 57" => "Ⅳ", # Roman numeral 4
+}
 
 # File references, this is how assets must be stored relative to the output script path.
 BG_FOLDER = 'bg'
@@ -85,7 +86,7 @@ SCREEN_HEIGHT = 1080
 
 # Prints a set of bytes in the specified colour
 def byte_print(array, c = 94)
-  Kernel.puts array.flatten.map { |e| e.to_s(16).rjust(2, '0') }.join(' ').c(c)
+  Kernel.puts Utils::hexdump(array).c(c)
 end
 
 # Stop if we are in the wrong mode (e.g. for specific instructions)
@@ -202,12 +203,14 @@ class IO
 
   # Read a SHIFT-JIS string of the given length. Must be null-terminated
   # (as all strings are in SNR format)
-  def read_shift_jis(len, halfwidth_replace = false)
+  def read_shift_jis(len)
     raw = read(len)
     raise 'Not null terminated!' unless raw.chars[-1] == 0.chr
-    result = CONVERTER.convert(raw[0..-2])
-    result = result.tr(HALFWIDTH, HALFWIDTH_REPLACE) if halfwidth_replace
+
+    converter = Encoding::Converter.new('SHIFT_JIS', 'UTF-8')
+    result = Utils::convert_with_mappings(converter, raw[0..-2], SHIFT_JIS_MAPPINGS, 'UTF-8')
     $stuff << "'#{result}'"
+    p result
     result
   end
 
@@ -240,15 +243,15 @@ class IO
   end
 
   # Read an asset table
-  def read_table(offset, length_prefix = true)
+  def read_table(offset, size_prefix = true)
     if offset == 0
       Kernel.puts "Warning: Offset for table is 0! Skipping" # somehow Konosuba does not have a BGM table???
       return
     end
 
     seek(offset)
-    if length_prefix
-      table_length, element_count = unpack_read('L<L<')
+    if size_prefix
+      table_size, element_count = unpack_read('L<L<')
     else
       element_count, _ = unpack_read('L<')
     end
@@ -293,9 +296,12 @@ class OutFile
     @voices = {}
     @table8 = {}
     @table9 = {}
+
+    @characters = {}
+    @tips = {}
   end
 
-  attr_accessor :masks, :backgrounds, :bustups, :bgm_tracks, :sound_effects, :movies, :voices, :table8, :table9
+  attr_accessor :masks, :backgrounds, :bustups, :bgm_tracks, :sound_effects, :movies, :voices, :table8, :table9, :offset10_data, :characters, :offset12_data, :tips
   attr_reader :offset, :script_offset, :dialogue_lines
 
   def offset=(value)
@@ -1600,6 +1606,7 @@ end
 
 filesize, dialogue_line_count, _, _, _, _, _ = file.unpack_read('L<L<L<L<L<L<L<')
 script_offset, mask_offset, bg_offset, bustup_offset, bgm_offset, se_offset, movie_offset, voice_offset, offset8, offset9 = file.unpack_read('L<L<L<L<L<L<L<L<L<L<')
+offset10, characters_offset, offset12, tips_offset = file.unpack_read('L<L<L<L<') if MODE == :saku
 
 out = OutFile.new(0x0, script_offset)
 raw = RawOutFile.new
@@ -1607,6 +1614,7 @@ $stuff = [] # Keeps track of what has been read from the file
 
 raw.offset = 0
 raw << "def raw_apply(snr)"
+raw << "snr.mode = :saku" if MODE == :saku
 
 out.offset = 0
 out.newline
@@ -1689,7 +1697,6 @@ file.read_table(bustup_offset) do |n|
   len, _ = file.unpack_read(MODE == :konosuba ? 'C' : 'S<')
   if MODE == :kal
     name = file.read_shift_jis(len)
-    puts name
     raw_name = name.clone
     name.gsub!("%DRESS%", "首輪") # TODO: do this in a smarter way
     character_id, scale_percent, x_offset, y_offset = file.unpack_read('S<S<S<s<')
@@ -1715,6 +1722,7 @@ file.read_table(bustup_offset) do |n|
     expr = file.read_shift_jis(len)
     character_id, _ = file.unpack_read('S<')
     out.bustups[n] = Bustup.new(name, expr, file.pos, character_id)
+    raw << "snr.bustup '#{name}', '#{expr}', #{character_id}"
 
     lut_entry = []
     lut_entry << ["$i2", out.raw_bustup(n)]
@@ -1812,6 +1820,7 @@ file.read_table(voice_offset) do |n|
     # Saku has a number of values prefixed with their length.
     len, _ = file.unpack_read('C')
     values = file.unpack_read('C' * len)
+    raw << "snr.voice '#{name}', #{len}, *#{values}"
   end
   out.voices[n] = Voice.new(name, file.pos, values)
   out << "; Voice 0x#{n.to_s(16)} at 0x#{file.pos.to_s(16)}: #{name} (values = #{values.map { |e| e.to_s(16) }.join(' ') })"
@@ -1822,7 +1831,7 @@ puts "Read #{out.voices.length} voices"
 
 # Read ???
 Table8Entry = Struct.new(:name, :offset, :data)
-file.read_table(offset8, length_prefix = false) do |n|
+file.read_table(offset8, size_prefix = nil) do |n|
   out.offset, raw.offset = file.pos, file.pos
   len, _ = file.unpack_read('S<')
   name = file.read_shift_jis(len)
@@ -1838,7 +1847,7 @@ puts "Read #{out.table8.length} table 8 entries"
 
 # Read ?????
 Table9Entry = Struct.new(:offset, :val1, :val2, :val3)
-file.read_table(offset9, length_prefix = false) do |n|
+file.read_table(offset9, size_prefix = nil) do |n|
   out.offset, raw.offset = file.pos, file.pos
   val1, val2, val3 = file.unpack_read('S<S<S<')
   out.table9[n] = Table9Entry.new(file.pos, val1, val2, val3)
@@ -1848,6 +1857,126 @@ end
 out.newline
 raw << "snr.write_table9\n"
 puts "Read #{out.table9.length} table 9 entries"
+
+# Read saku specific tables
+if MODE == :saku
+  # No idea what offset 10 is about. It seems to point to a blob of binary data
+  # with a somewhat regular but inconsistent structure. It is certainly not
+  # delimited into "elements" like previous tables are.
+  file.seek(offset10)
+  out.offset, raw.offset = offset10, offset10
+  len, _ = file.unpack_read('L<')
+  offset10_data = file.read(len)
+  out.offset10_data = offset10_data
+  raw << "snr.write_offset10_data #{offset10_data.unpack('C*')}"
+  out << "; offset 10 data omitted, length = 0x#{len.to_s(16)}"
+  out.newline
+  puts "Read #{len} offset 10 data bytes"
+
+  # Descriptions on the character screen
+  CharactersEntry = Struct.new(:offset, :val1, :segments)
+
+  CharacterSegment01 = Struct.new(:val2)
+  CharacterSegment02 = Struct.new(:val3, :val4, :id1, :id2)
+  CharacterSegment03 = Struct.new(:character_name, :description)
+
+  file.read_table(characters_offset) do |n|
+    out.offset, raw.offset = file.pos, file.pos
+
+    val1, _ = file.unpack_read('C')
+    segments = []
+
+    # Read segments
+    loop do
+      segment_id, _ = file.unpack_read('C')
+      segment = nil
+
+      case segment_id
+      when 0
+        break # End of entry
+      when 1
+        val2, _ = file.unpack_read('C')
+        segment = CharacterSegment01.new(val2)
+      when 2
+        val3, val4 = file.unpack_read('CC')
+        id1, id2 = 2.times.map do
+          len, _ = file.unpack_read('S<')
+          file.read_shift_jis(len)
+        end
+        segment = CharacterSegment02.new(val3, val4, id1, id2)
+      when 3
+        character_name, description = 2.times.map do
+          len, _ = file.unpack_read('S<')
+          file.read_shift_jis(len)
+        end
+        segment = CharacterSegment03.new(character_name, description)
+      else
+        raise "Invalid segment ID at 0x#{file.pos.to_s(16)}: 0x#{segment_id.to_s(16)}"
+      end
+
+      segments << segment
+    end
+
+    out.characters[n] = CharactersEntry.new(file.pos, val1, segments)
+
+    # Write to raw
+    raw << "segments = []"
+    segments.each do |segment|
+      if segment.is_a? CharacterSegment01
+        raw << "segments << [1, #{segment.val2}] \# index"
+      elsif segment.is_a? CharacterSegment02
+        raw << "segments << [2, #{segment.val3}, #{segment.val4}, '#{segment.id1}', '#{segment.id2}'] \# sprites?"
+      elsif segment.is_a? CharacterSegment03
+        raw << "segments << [3, '#{segment.character_name}', '#{segment.description}'] \# name, description"
+      else
+        raise "Invalid segment"
+      end
+    end
+    raw << "snr.character #{val1}, segments"
+
+    # Write to out
+    out << "; characters entry 0x#{n.to_s(16)} at 0x#{file.pos.to_s(16)}: val1 = 0x#{val1.to_s(16)}"
+    segments.each do |segment|
+      out << ";   segment: #{segment}"
+    end
+    out << "; -- end of characters entry"
+  end
+  out.newline
+  raw << "snr.write_characters\n"
+  puts "Read #{out.characters.length} character descriptions"
+
+  # No idea what this data is either. I *think* it is actually a table prefixed
+  # with the number of elements, but I can't make out a structure in the elements
+  # that would allow me to read them in one by one. Regardless, the meaning of
+  # this table is a mystery to me, so there is no point in doing that anyway
+  file.seek(offset12)
+  out.offset, raw.offset = offset12, offset12
+  len, _ = file.unpack_read('L<')
+  offset12_data = file.read(len)
+  out.offset12_data = offset12_data
+  raw << "snr.write_offset12_data #{offset12_data.unpack('C*')}"
+  out << "; offset 12 data omitted, length = 0x#{len.to_s(16)}"
+  out.newline
+  puts "Read #{len} offset 12 data bytes"
+
+  # Tips in the tips screen, giving detail to the story
+  # val1 is probably the episode number
+  TipsEntry = Struct.new(:offset, :val1, :val2, :name, :content)
+  file.read_table(tips_offset) do |n|
+    out.offset, raw.offset = file.pos, file.pos
+    val1, val2 = file.unpack_read('CS<')
+    name, content = 2.times.map do
+      len, _ = file.unpack_read('S<')
+      file.read_shift_jis(len)
+    end
+    out.tips[n] = TipsEntry.new(file.pos, val1, val2, name, content)
+    raw << "snr.tip #{val1}, #{val2}, '#{name}', '#{content}'"
+    out << "; tips entry 0x#{n.to_s(16)} at 0x#{file.pos.to_s(16)}: val1 = 0x#{val1.to_s(16)}, val2 = 0x#{val2.to_s(16)}, name = '#{name}', content = '#{content}'"
+  end
+  out.newline
+  raw << "snr.write_tips\n"
+  puts "Read #{out.characters.length} tips"
+end
 
 # Text window definitions
 WINDOWS.each do |_, v|
@@ -1886,7 +2015,7 @@ out << "; Entry point: 0x#{entry_point.to_s(16)}"
 out << "*snr_script_start"
 out.newline
 
-raw << "s = KalScript.new(snr.current_offset + 8)\n"
+raw << "s = KalScript.new(snr.current_offset + #{RAW_SCRIPT_FIX_OFFSET})\n"
 raw.entry_point = entry_point
 
 # The loop for parsing the script data
@@ -2072,7 +2201,6 @@ while true do
   when 0x4f # function call
     raw_override = true
     address, len = file.unpack_read('L<C')
-    puts "Greater than 0xffff!" if address > 0xffff
     $stuff = []
     data = file.read_variable_length(len)
     raw << "s.ins 0x4f, #{raw.label(address)}, [#{$stuff.join(', ')}]"
@@ -2112,14 +2240,15 @@ while true do
   when 0x86 # dialogue
     if MODE == :saku
       # Saku somehow stores the dialogue number in a three-byte integer??
-      dialogue_num_low_bytes, dialogue_num_high_byte, var1, length = file.unpack_read('S<CCS<')
+      dialogue_num_low_bytes, dialogue_num_high_byte, var1 = file.unpack_read('S<CC')
+      length, _ = file.unpack_read('S<', ignore = true)
       dialogue_num = (dialogue_num_high_byte << 16) | dialogue_num_low_bytes
     else
-      dialogue_num, var1, length = file.unpack_read('L<C')
+      dialogue_num, var1 = file.unpack_read('L<C')
       length, _ = file.unpack_read('S<', ignore = true)
     end
-    str = file.read_shift_jis(length, true)
-    out.dialogue(dialogue_num, var1, length, str)
+    str = file.read_shift_jis(length)
+    out.dialogue(dialogue_num, var1, length, Utils::enter_to_readable(str))
     break if dialogue_num > max_dialogue
   when 0x87 # dialogue pipe wait
     argument, _ = file.unpack_read('C')
@@ -2439,11 +2568,7 @@ puts "Writing..."
 
 if output_path
   out.write(output_path)
-
-  # Saku specific variants of certain commands are not yet supported for the
-  # raw output. You can remove this check if you know what you are doing and
-  # are not expecting a fully bidirectional transformation.
-  raw.write(output_path + "_raw.rb") if MODE == :kal
+  raw.write(output_path + "_raw.rb")
 end
 
 File.write(dialogue_path, out.dialogue_lines.join("\n")) if dialogue_path
