@@ -341,6 +341,11 @@ def ushort(val); raw_pack(val, 'S<'); end
 def int(val); raw_pack(val, 'l<'); end
 def uint(val); raw_pack(val, 'L<'); end
 
+def uint24(val)
+  packed = [val & 0xffff, val >> 16].pack('S<C')
+  Raw.new(packed)
+end
+
 class KalScript
   def initialize(offset)
     @offset = offset
