@@ -13,16 +13,19 @@ FileToPack = Struct.new(:name, :folder?, :content)
 # `files_to_pack`: array of `FileToPack` — files and folders to pack as part of this folder
 # `parent_name`: name of the parent folder (important for `..` references)
 # `root?`: whether this folder is the root folder
-FolderToProcess = Struct.new(:name, :files_to_pack, :parent_name, :root?)
+FolderToProcess = Struct.new(:name, :files_to_pack, :parent_path, :root?)
 
-FolderOffset = Struct.new(:position, :name)
+# `position`: position in bytes where the offset should be stored
+# `path`: full path of folder to store the offset for
+FolderOffset = Struct.new(:position, :path)
 
+# `path`: full path of folder that was written
 # `data`: header section data representing this folder's contents
 # `size`: size of aforementioned data in bytes
 # `other_folder_offsets`: Array of `FolderOffset` — Offsets within the `data` where the entries for subfolders were stored,
 #                         so that the correct offset of the folder data within the rom file can be written there later
 # `subfolders_to_process`: Array of `FolderToProcess` — subfolders that were found and need to be written as well
-WrittenFolder = Struct.new(:data, :size, :other_folder_offsets, :subfolders_to_process)
+WrittenFolder = Struct.new(:path, :data, :size, :other_folder_offsets, :subfolders_to_process)
 
 # A folder that was packed into a rom file
 # `data`: the binary data representing the folder's contents, for the header section
@@ -76,7 +79,7 @@ class KalRom2File
         # Add location of current folder in the header to all offsets, as the
         # references to other folders are relative to the header
         folder_offsets += written_folder.other_folder_offsets.map do |offset|
-          FolderOffset.new(offset.position + location, offset.name)
+          FolderOffset.new(offset.position + location, offset.path)
         end
 
         new_folders_to_process += written_folder.subfolders_to_process
@@ -85,7 +88,7 @@ class KalRom2File
         puts "Wrote folder #{folder_to_process.name} to header"
         align = (1 << FOLDER_ALIGNMENT) - 1
         header.seek((header.pos + align) & ~align) # align next folder to 0x10
-        @folder_data[folder_to_process.name] = PackedFolder.new(written_folder.data, written_folder.size, location >> FOLDER_ALIGNMENT)
+        @folder_data[written_folder.path] = PackedFolder.new(written_folder.data, written_folder.size, location >> FOLDER_ALIGNMENT)
       end
 
       folders_to_process = new_folders_to_process
@@ -94,7 +97,7 @@ class KalRom2File
     p folder_offsets
 
     folder_offsets.each do |offset|
-      f = @folder_data[offset.name]
+      f = @folder_data[offset.path]
       header.seek(offset.position)
       header.write([f.flat_location, f.size].pack('L<L<'))
     end
@@ -137,13 +140,21 @@ class KalRom2File
 
   private
 
-  def write_folder(folder_to_process)
+  def join_paths(path1, path2)
+    return path2 if path1 == :root
+    path1 + "/" + path2
+  end
 
-    # name, folder, parent_name, is_root = false
+  def write_folder(folder_to_process)
     puts "write_folder #{folder_to_process.name}"
 
     # The root folder has no parent
-    parent_name = folder_to_process.root? ? folder_to_process.name : folder_to_process.parent_name
+    if folder_to_process.root?
+      path = parent_path = folder_to_process.name
+    else
+      parent_path = folder_to_process.parent_path
+      path = join_paths(parent_path, folder_to_process.name)
+    end
 
     result = StringIO.new
     result.binmode
@@ -176,15 +187,15 @@ class KalRom2File
         case file.name
         when '.'
           # Reference to self
-          other_folder_offsets << FolderOffset.new(result.pos, folder_to_process.name)
+          other_folder_offsets << FolderOffset.new(result.pos, path)
         when '..'
           # Reference to parent folder
-          other_folder_offsets << FolderOffset.new(result.pos, parent_name)
+          other_folder_offsets << FolderOffset.new(result.pos, parent_path)
         else
           # Actual subfolder
           puts "add folder #{file.name}"
-          subfolders_to_process << FolderToProcess.new(file.name, file.content, folder_to_process.name, false)
-          other_folder_offsets << FolderOffset.new(result.pos, file.name)
+          subfolders_to_process << FolderToProcess.new(file.name, file.content, path, false)
+          other_folder_offsets << FolderOffset.new(result.pos, join_paths(path, file.name))
         end
 
         # Remaining unused bytes
@@ -228,7 +239,7 @@ class KalRom2File
     end
 
     our_size = result.length
-    WrittenFolder.new(result.string, our_size, other_folder_offsets, subfolders_to_process)
+    WrittenFolder.new(path, result.string, our_size, other_folder_offsets, subfolders_to_process)
   end
 end
 
