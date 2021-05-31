@@ -278,7 +278,11 @@ class KalSNRFile
   end
 
   def write_script(script_data, entry_point, dialogue_line_count)
-    align_to(0xf)
+    # This alignment was tested both ways with both Saku and Kal — either game would
+    # freeze when entering the scenario with the wrong alignment.
+    # No idea why this matters so much...
+    align_to(@mode == :saku ? 0xf : 0x4)
+
     pos = @data.pos
     at(SCRIPT_OFFSET_LOCATION) { @data.write([pos].pack('L<'))}
     at(DIALOGUE_LINE_COUNT_LOCATION) { @data.write([dialogue_line_count].pack('L<'))}
