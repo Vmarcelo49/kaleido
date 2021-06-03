@@ -363,12 +363,24 @@ class KalScript
 
   attr_reader :dialogue_line_count
 
+  # The layouter, used by `layout`. Should be something that responds to
+  # #layout itself, for instance a WordWrapLayouter
+  attr_accessor :layouter
+
   def lc
     int(@dialogue_line_count)
   end
 
   def lc_saku
     ushort(@dialogue_line_count)
+  end
+
+  # Automatically insert newlines into English text to allow for word-level
+  # text wrapping instead of character-level wrapping, which is what the engine
+  # would otherwise do. Requires `layouter` to be set to an appropriate object.
+  def layout(text)
+    raise "No layouter set!" if @layouter.nil?
+    layouter.layout(text)
   end
 
   def data

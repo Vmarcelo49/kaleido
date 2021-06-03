@@ -1,8 +1,9 @@
 # Does the same thing as repack.rb, but allows replacing the SNR file with one
 # compiled from a specified ruby script.
 
-load './scenario.rb'
-load './toolkit.rb'
+require_relative 'scenario.rb'
+require_relative 'toolkit.rb'
+require_relative 'layout.rb'
 
 # Arguments:
 # 1. ruby script to compile to SNR (e.g. minimal_example.rb in this folder)

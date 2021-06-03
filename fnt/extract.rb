@@ -3,6 +3,8 @@ require 'csv'
 require 'stringio'
 require 'json'
 
+require_relative 'glyph.rb'
+
 begin
   begin
     require 'oily_png' # try more performant native library first
@@ -20,6 +22,9 @@ end
 # Arguments:
 path = ARGV[0] # Input .fnt file
 output_path = ARGV[1] # Output folder
+# Specify `manifest-only` as the last argument to skip exporting the individual
+# glyphs
+manifest_only = (ARGV[2] == "manifest-only")
 
 file = open(path, 'rb')
 
@@ -83,7 +88,6 @@ end
 
 manifest = {} # Glyphs by their index
 lookup = {} # Glyphs by their address
-Glyph = Struct.new(:index_hex, :address, :path, :offset_x, :offset_y, :crop_width, :crop_height, :frame_width, :val6, :data_width, :data_height, :decompressed)
 
 puts "Found #{header.length} glyphs, #{header.uniq.length} unique"
 
@@ -109,6 +113,7 @@ header.each_with_index do |e, i|
   end
 
   manifest[i] = glyph
+  next if manifest_only
 
   raw_path = File.join(output_path, "raw", glyph_path + ".dat")
   FileUtils.mkdir_p File.dirname(raw_path)
@@ -133,6 +138,11 @@ header.each_with_index do |e, i|
 end
 
 File.write(File.join(output_path, "data.rb_marshal"), Marshal.dump(manifest))
+
+manifest.each do |k, v|
+  v.decompressed = nil
+end
+File.write(File.join(output_path, "manifest.rb_marshal"), Marshal.dump(manifest))
 
 json_friendly_manifest = Hash[manifest.map { |k, v| [k, v.to_h.except(:decompressed)] }]
 File.write(File.join(output_path, "manifest.json"), JSON.pretty_generate(json_friendly_manifest))
