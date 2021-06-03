@@ -367,6 +367,10 @@ class KalScript
     int(@dialogue_line_count)
   end
 
+  def lc_saku
+    ushort(@dialogue_line_count)
+  end
+
   def data
     fix_labels
     @data.string
