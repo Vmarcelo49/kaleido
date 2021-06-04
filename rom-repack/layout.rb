@@ -143,7 +143,8 @@ class WordWrapLayouter
       if @current_line_length + @current_element_length > @width
         # Remove breakable elements from the end (so we don't have dangling
         # spaces or something like that)
-        @elements = @elements[0..@elements.rindex { |e| !e.can_break? }]
+        last_non_breaking_index = @elements.rindex { |e| !e.can_break? }
+        @elements = @elements[0..last_non_breaking_index] unless last_non_breaking_index.nil?
 
         # Add a newline
         @elements << Element.new("@r", false)
