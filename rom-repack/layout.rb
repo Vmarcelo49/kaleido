@@ -141,6 +141,17 @@ class WordWrapLayouter
     # this time
     def check_break
       if @current_line_length + @current_element_length > @width
+        if @current_line_length == 0
+          # We have hit the textbox width from just the length of the current
+          # element. This means we are in a very long section that can not be
+          # broken in the usual way in the middle, so we give up here, insert a
+          # newline in the middle of the text and reset the current tracked
+          # length.
+          @current_element += "@r"
+          @current_element_length = 0
+          return # Don't do the normal processing here as it would be redundant
+        end
+
         # Remove breakable elements from the end (so we don't have dangling
         # spaces or something like that)
         last_non_breaking_index = @elements.rindex { |e| !e.can_break? }
