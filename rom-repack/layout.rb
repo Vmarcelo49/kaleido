@@ -87,6 +87,7 @@ class WordWrapLayouter
             # than that the content should be processed normally (colour, voice,
             # etc.)
             parameter, text = content.split(".")
+            text ||= ""
 
             # If we are handling a font size tag we need to adjust the internal
             # scale:
