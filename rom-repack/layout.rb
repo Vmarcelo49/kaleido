@@ -86,7 +86,7 @@ class WordWrapLayouter
             # Tags that take some extra data delimited by a period, but other
             # than that the content should be processed normally (colour, voice,
             # etc.)
-            parameter, text = content.split(".")
+            parameter, text = content.split(".", 2)
             parameter ||= ""
             text ||= ""
 
