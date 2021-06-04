@@ -63,7 +63,7 @@ class WordWrapLayouter
         if e.start_with? '@'
           tag, content = [e[0..1], e[2..-1]]
           case tag
-          when "@k", "@b", "@>", "@[", "@]", "@{", "@}", "@|", "@y", "@e", "@t", "@-"
+          when "@k", "@>", "@[", "@]", "@{", "@}", "@|", "@y", "@e", "@t", "@-"
             # Tags whose content should be processed for potential line breaks.
 
             # Some of these tags cause style changes that need to be tracked:
@@ -72,6 +72,16 @@ class WordWrapLayouter
 
             append_raw(tag)
             append_chars(content)
+          when "@b"
+            # Tags whose content should neither have line breaks inserted nor
+            # count for line length (furigana top text)
+            append_raw(tag)
+            append_raw(content)
+          when "@<"
+            # Tags whose content should not have line breaks inserted but
+            # which *should* count for line length (furigana bottom text)
+            append_raw(tag)
+            append_chars(content, no_break: true)
           when "@v", "@w", "@o", "@a", "@z", "@c", "@s"
             # Tags that take some extra data delimited by a period, but other
             # than that the content should be processed normally (colour, voice,
@@ -142,13 +152,13 @@ class WordWrapLayouter
     end
 
     # Append multiple characters at once
-    def append_chars(chars)
-      chars.each_char { |char| append_char(char) }
+    def append_chars(chars, no_break: false)
+      chars.each_char { |char| append_char(char, no_break: no_break) }
     end
 
     # Append one character
-    def append_char(char)
-      if can_break_on?(char)
+    def append_char(char, no_break: false)
+      if can_break_on?(char) && !no_break
         next_element
         @current_element_length += char_width(char)
         append_raw(char)
