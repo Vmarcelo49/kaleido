@@ -4,6 +4,8 @@ require 'stringio'
 require 'json'
 
 require_relative 'glyph.rb'
+require_relative 'fnt_format.rb'
+require_relative '../higu_compression.rb'
 
 begin
   begin
@@ -26,59 +28,13 @@ output_path = ARGV[1] # Output folder
 # glyphs
 manifest_only = (ARGV[2] == "manifest-only")
 
-file = open(path, 'rb')
-
-magic = file.read(4)
-if magic != 'FNT4'
-  puts "Not an FNT4 file!".c(91)
-  exit
-end
-
-val1, size, val2 = file.read(0xc).unpack('L<L<L<')
-header = file.read(0x40000).unpack('L*')
+fnt_file = FntReader.new(open(path, 'rb'))
 
 FileUtils.mkdir_p output_path
 
 def decompress_glyph(glyph_data, size)
   bytes = glyph_data.bytes
-  marker = 1
-  p = 0
-  out_bytes = Array.new(size)
-
-  while p < bytes.length
-    # If we have exhausted the previous marker's bits, read the next marker.
-    if marker == 1
-      marker = 0x100 | bytes[p]
-      p += 1
-      next
-    end
-
-    if marker & 1 == 0
-      # Read one byte
-      b1 = bytes[p]
-      p += 1
-
-      out_bytes << b1
-    else # marker & 1 == 1
-      # Read two bytes
-      b12 = bytes[p..p+1]
-      p += 2
-
-      b1, b2 = b12
-      count = ((b1 & 0xfc) >> 2) + 3
-      offset = ((b1 & 0x03) << 8) | b2
-
-      count.times do
-        r = out_bytes[-(offset + 1)]
-        raise "Invalid lookback offset -#{offset}" if r.nil?
-        out_bytes << r
-      end
-    end
-
-    marker >>= 1
-  end
-
-  out_bytes.compact
+  HiguCompression.decompress(bytes, 6)
 end
 
 def decompressed_to_png(decompressed, width, height)
@@ -89,9 +45,9 @@ end
 manifest = {} # Glyphs by their index
 lookup = {} # Glyphs by their address
 
-puts "Found #{header.length} glyphs, #{header.uniq.length} unique"
+puts "Found #{fnt_file.header.length} glyphs, #{fnt_file.header.uniq.length} unique"
 
-header.each_with_index do |e, i|
+fnt_file.header.each_with_index do |e, i|
   start_time = Time.now
   glyph_index_hex = i.to_s(16).rjust(4, '0')
   filename = glyph_index_hex + "_" + e.to_s(16)
@@ -100,12 +56,7 @@ header.each_with_index do |e, i|
   if lookup.key?(e)
     glyph = lookup[e]
   else
-    file.seek(e)
-    offset_x, offset_y, crop_width, crop_height, frame_width, val6, data_width, data_height = file.read(8).unpack('C*')
-    raise "val6 of glyph #{glyph_index_hex} is not 0 but #{val6}" if val6 != 0
-
-    bytes_size, _ = file.read(2).unpack('S<')
-    glyph_data = file.read(bytes_size)
+    offset_x, offset_y, crop_width, crop_height, frame_width, val6, data_width, data_height, bytes_size, glyph_data = fnt_file.read_glyph_by_address(e)
     decompressed = decompress_glyph(glyph_data, data_width * data_height * 2)
 
     glyph = Glyph.new(glyph_index_hex, e, glyph_path, offset_x, offset_y, crop_width, crop_height, frame_width, val6, data_width, data_height, decompressed)
