@@ -97,8 +97,14 @@ glyph_folders.each do |glyph_folder_path|
   # Default values for newrodin, these work pretty well with other fonts too
   x_offset, y_offset = default_x_offset, default_y_offset
 
-  # x offset: positive =^= right
-  x_offset -= overrun_left * 128 / em if overrun_left > 0
+  if overrun_left > 0
+    # x offset: positive =^= right
+    x_offset -= overrun_left * 128 / em
+
+    # If the glyph is shifted to the left, we need to adjust the advance width
+    # by the same amount so that the next character is not placed too closely.
+    advance_width += overrun_left * 128 / em
+  end
 
   # y offset: positive =^= up
   y_offset += overrun_above * 128 / em if overrun_above > 0
