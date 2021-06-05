@@ -18,9 +18,18 @@ out_formats = [
     ["0.125x", 15]
 ]
 
+ascent = font.ascent
+descent = font.descent
+em = font.em
+
 for glyph in font.glyphs():
     if glyph.unicode > -1:
-        glyph_folder_name = f"glyph_{glyph.unicode}_{glyph.width}"
+        xmin, ymin, xmax, ymax = glyph.boundingBox()
+        overrun_above = ymax - ascent
+        overrun_below = -ymin - descent
+        overrun_left = -glyph.left_side_bearing
+        # overrun_right nis not relevant for our purposes
+        glyph_folder_name = f"glyph_{glyph.unicode}_{glyph.width}_{em}_{overrun_above}_{overrun_below}_{overrun_left}"
         glyph_folder = out_folder / glyph_folder_name
         glyph_folder.mkdir(exist_ok = True)
 
