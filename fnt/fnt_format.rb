@@ -46,3 +46,55 @@ class FntReader
     @header = @file.read(0x40000).unpack('L*')
   end
 end
+
+# Class to write .fnt files for Entergram's engine
+class FntWriter
+  def initialize(val1, val2)
+    @val1, @val2 = val1, val2
+
+    # This will become the file header
+    @glyph_table = [nil] * 0xffff
+  end
+
+  def set_glyph(codepoint, offset_x, offset_y, crop_width, crop_height,
+      frame_width, val6, data_width, data_height, glyph_data)
+    encoded = encode_glyph(offset_x, offset_y, crop_width, crop_height,
+      frame_width, val6, data_width, data_height, glyph_data)
+    @glyph_table[codepoint] = encoded
+  end
+
+  def write_to(file)
+    file.write("FNT4")
+    file.write([@val1, 0, @val2].pack('L<L<L<'))
+
+    # Verify that all glyphs are non-nil
+    @glyph_table.each_with_index do |encoded_glyph, codepoint|
+      raise "Glyph at codepoint #{codepoint} is nil!" if encoded_glyph.nil?
+    end
+
+    # Write glyph data itself
+    file.seek(0x40010)
+    glyph_addresses = {}
+    @glyph_table.uniq.each do |encoded_glyph|
+      glyph_addresses[encoded_glyph] = file.pos
+      file.write(encoded_glyph)
+    end
+
+    size = file.pos
+
+    # Write glyph table at the start
+    file.seek(0x10)
+    address_list = @glyph_table.map { |e| glyph_addresses[e] }
+    file.write(address_list.pack('L<*'))
+
+    # Write size
+    file.seek(0x8)
+    file.write([size].pack('L<'))
+  end
+
+  private
+
+  def encode_glyph(*stuff, glyph_data)
+    (stuff + [glyph_data.length]).pack('ccCCCCCCS<') + glyph_data
+  end
+end

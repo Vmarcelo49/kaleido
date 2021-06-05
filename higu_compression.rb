@@ -57,13 +57,19 @@ module HiguCompression
 
     # Convert run lengths to Higu instructions
     instructions = run_lengths.each_slice(2).map do |byte, len|
-      (len < 3) ? [byte] * len : [byte, [len, 0]]
+      (len < 4) ? [byte] * len : [byte, [len - 1, 0]]
     end
 
     # Split overlong instructions
     instruction_sets = instructions.flatten(1).map do |e|
       if e.is_a?(Array) && e.first >= max_count
-        ([[max_count, e.last]] * (e.first / max_count)) + [[e.first % max_count, e.last]]
+        const_run = [[max_count, e.last]] * (e.first / max_count)
+        last_len = e.first % max_count
+        if last_len < 3 # make sure the length never goes below 3
+          const_run[-1] = [const_run.last[0] - (3 - last_len), const_run.last[1]]
+          last_len = 3
+        end
+        const_run + [[last_len, e.last]]
       else
         [e]
       end
