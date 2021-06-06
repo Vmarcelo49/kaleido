@@ -278,10 +278,15 @@ class KalSNRFile
   end
 
   def write_script(script_data, entry_point, dialogue_line_count)
-    # This alignment was tested both ways with both Saku and Kal — either game would
-    # freeze when entering the scenario with the wrong alignment.
-    # No idea why this matters so much...
-    align_to(@mode == :saku ? 0xf : 0x4)
+    if @mode == :kal
+      align_to(0x3) # TODO: test whether this works in all cases
+    else
+      # It seems that Saku needs there to be exactly 10 to 13 zero bytes in
+      # between the last non-zero byte of the header and the first script
+      # byte, aligned to four bytes
+      @data.seek(@data.pos + 0x9)
+      align_to(0x3)
+    end
 
     pos = @data.pos
     at(SCRIPT_OFFSET_LOCATION) { @data.write([pos].pack('L<'))}
