@@ -96,6 +96,24 @@ class WordWrapLayouter
 
             append_raw(tag + parameter + ".")
             append_chars(text)
+          when "@u"
+            # Unicode character tag, the tag parameter is a decimal number
+            # specifying the Unicode codepoint to insert. ('@u229.' => 'å')
+            parameter, text = content.split(".", 2)
+            parameter ||= ""
+            text ||= ""
+
+            char = [parameter.to_i].pack('U')
+
+            # We need to append the tag with its parameter as "one character",
+            # so that the game will correctly show the Unicode character we
+            # need. However, the width of the underlying character must be
+            # used instead of the "width of the tag"
+            width = char_width(char)
+            append_char(tag + parameter + ".", width_override: width)
+
+            # Append the content following the tag as normal
+            append_chars(text)
           when "@r"
             # Newline tag, needs to be processed separately as it should reset
             # the tracked line length
@@ -171,14 +189,16 @@ class WordWrapLayouter
     end
 
     # Append one character
-    def append_char(char, no_break: false)
+    def append_char(char, no_break: false, width_override: nil)
+      width = width_override || char_width(char)
+
       if can_break_on?(char) && !no_break
         next_element
-        @current_element_length += char_width(char)
+        @current_element_length += width
         append_raw(char)
         next_element(true)
       else
-        @current_element_length += char_width(char)
+        @current_element_length += width
         append_raw(char)
       end
 
